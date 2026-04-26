@@ -6,7 +6,9 @@ pub mod quarantine;
 
 use crate::core::model::{ActionRecord, ExecutionMode};
 
-pub fn part1_planned_actions(mode: ExecutionMode) -> Vec<ActionRecord> {
+/// Partie 2 : aucune action système réelle.
+/// On documente seulement ce que le mode autorisera plus tard.
+pub fn part2_planned_actions(mode: ExecutionMode) -> Vec<ActionRecord> {
     match mode {
         ExecutionMode::AuditOnly => vec![ActionRecord::skipped(
             mode,

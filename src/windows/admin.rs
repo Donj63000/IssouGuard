@@ -1,15 +1,20 @@
 use std::process::Command;
 
+/// Détection admin prudente.
+/// Sous Windows, on utilise PowerShell local uniquement.
+/// Hors Windows, on retourne false.
 pub fn is_elevated() -> bool {
     #[cfg(target_os = "windows")]
     {
+        let script = "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)";
+
         let output = Command::new("powershell.exe")
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+                script,
             ])
             .output();
 
@@ -17,14 +22,14 @@ pub fn is_elevated() -> bool {
             let stdout = String::from_utf8_lossy(&output.stdout);
             return stdout.trim().eq_ignore_ascii_case("true");
         }
+
+        false
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = Command::new("true");
+        false
     }
-
-    false
 }
 
 pub fn admin_message(is_admin: bool) -> &'static str {

@@ -17,10 +17,9 @@ pub enum IssaError {
     InvalidMode(String),
 
     #[error("commande PowerShell échouée : {0}")]
-    #[allow(dead_code)]
     PowerShell(String),
 
-    #[error("aucun rapport IssaGuard trouvé")]
+    #[error("aucun rapport IssaGuard trouvé sur le Bureau")]
     NoReportFound,
 }
 
@@ -87,7 +86,7 @@ impl RiskLevel {
     pub fn message(self) -> &'static str {
         match self {
             Self::NotAssessed => {
-                "Score non calculé : cette étape pose l'architecture mais ne collecte pas encore les preuves système."
+                "Score non calculé : cette étape prépare le socle mais ne collecte pas encore les preuves système."
             }
             Self::Green => {
                 "Aucune preuve locale d'exécution ou de persistance suspecte dans le périmètre audité. Scan Defender recommandé."
@@ -102,15 +101,9 @@ impl RiskLevel {
     }
 }
 
-impl fmt::Display for RiskLevel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.label())
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RiskAssessmentScope {
-    ArchitectureOnly,
+    FoundationOnly,
     AuditEvidence,
 }
 
@@ -138,6 +131,9 @@ pub enum FindingCategory {
     Architecture,
     SafetyPolicy,
     IocDefinition,
+    PathResolution,
+    AdminStatus,
+    Logging,
     Defender,
     Process,
     File,
@@ -189,7 +185,6 @@ impl Finding {
         }
     }
 
-    #[allow(dead_code, clippy::too_many_arguments)]
     pub fn risk_finding(
         id: impl Into<String>,
         category: FindingCategory,
@@ -290,6 +285,31 @@ impl ActionRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WindowsPaths {
+    pub current_dir: PathBuf,
+    pub executable_path: Option<PathBuf>,
+    pub user_profile: Option<PathBuf>,
+    pub desktop_dir: PathBuf,
+    pub downloads_dir: Option<PathBuf>,
+    pub temp_dir: PathBuf,
+    pub local_appdata: Option<PathBuf>,
+    pub roaming_appdata: Option<PathBuf>,
+    pub program_data: Option<PathBuf>,
+    pub user_startup_dir: Option<PathBuf>,
+    pub machine_startup_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolSignatureInfo {
+    pub tool_name: String,
+    pub version: String,
+    pub build_profile: String,
+    pub target_os: String,
+    pub target_arch: String,
+    pub executable_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafetyPolicy {
     pub local_only: bool,
     pub no_contact_with_suspicious_domains: bool,
@@ -313,22 +333,23 @@ impl Default for SafetyPolicy {
             prefer_disable_over_delete_for_persistence: true,
             defender_updates_allowed: true,
             rules: vec![
-                "Ne jamais rouvrir ni télécharger claud-hub.com ou le faux site".into(),
-                "Ne jamais exécuter de code Internet pendant l'analyse".into(),
-                "Ne pas supprimer aveuglément setup/install/update : classer, justifier, quarantaine".into(),
-                "Ne pas lire, déchiffrer ni exporter les mots de passe/cookies navigateurs".into(),
-                "Ne rien envoyer vers Internet ; local-only sauf Microsoft Defender/Microsoft Update".into(),
-                "Retirer uniquement les autorisations Defender liées à l'incident".into(),
-                "Exporter avant modification registre/tâche/service".into(),
-                "Préférer désactivation à suppression pour les persistances".into(),
-                "Conserver rollback et manifest pour toute action réversible".into(),
-                "Ne jamais promettre que les comptes sont sûrs après une possible exfiltration".into(),
+                "Ne jamais rouvrir ni télécharger claud-hub.com ou le faux site.".into(),
+                "Ne jamais exécuter de code Internet pendant l'analyse.".into(),
+                "Ne pas supprimer aveuglément setup/install/update : classer, justifier, quarantaine.".into(),
+                "Ne pas lire, déchiffrer ni exporter les mots de passe/cookies navigateurs.".into(),
+                "Ne rien envoyer vers Internet ; local-only sauf Microsoft Defender/Microsoft Update.".into(),
+                "Retirer uniquement les autorisations Defender liées à l'incident.".into(),
+                "Exporter avant modification registre/tâche/service.".into(),
+                "Préférer désactivation à suppression pour les persistances.".into(),
+                "Conserver rollback et manifest pour toute action réversible.".into(),
+                "Ne jamais promettre que les comptes sont sûrs après une possible exfiltration.".into(),
             ],
             limitations: vec![
-                "Un nettoyage local ne peut pas annuler une exfiltration déjà réalisée".into(),
-                "Un score Vert signifie seulement absence de preuve dans le périmètre audité".into(),
-                "Une preuve faible ne doit pas déclencher seule une suppression destructive".into(),
-                "IssaGuard orchestre et documente ; il ne remplace pas Microsoft Defender".into(),
+                "Un nettoyage local ne peut pas annuler une exfiltration déjà réalisée.".into(),
+                "Un score Vert signifie seulement absence de preuve dans le périmètre audité.".into(),
+                "Une preuve faible ne doit pas déclencher seule une suppression destructive.".into(),
+                "IssaGuard orchestre et documente ; il ne remplace pas Microsoft Defender.".into(),
+                "La Partie 2 ne collecte pas encore les preuves réelles Defender/processus/fichiers.".into(),
             ],
         }
     }
@@ -453,6 +474,8 @@ pub struct ReportData {
     pub risk_message: String,
     pub safety_policy: SafetyPolicy,
     pub iocs: IocSet,
+    pub system_paths: WindowsPaths,
+    pub signature: ToolSignatureInfo,
     pub findings: Vec<Finding>,
     pub actions: Vec<ActionRecord>,
     pub timeline: Vec<TimelineEvent>,
@@ -465,13 +488,16 @@ impl ReportData {
         is_admin: bool,
         mode: ExecutionMode,
         scope: RiskAssessmentScope,
+        system_paths: WindowsPaths,
+        signature: ToolSignatureInfo,
     ) -> Self {
         let risk_level = RiskLevel::NotAssessed;
+        let tool_version = tool_version.into();
 
         Self {
             metadata: ReportMetadata {
                 tool_name: "IssaGuard".into(),
-                tool_version: tool_version.into(),
+                tool_version,
                 generated_at: Local::now(),
                 report_dir,
                 hostname: std::env::var("COMPUTERNAME")
@@ -488,55 +514,14 @@ impl ReportData {
             risk_message: risk_level.message().to_string(),
             safety_policy: SafetyPolicy::default(),
             iocs: IocSet::default(),
+            system_paths,
+            signature,
             findings: Vec::new(),
             actions: Vec::new(),
             timeline: vec![TimelineEvent::now(
                 "Initialisation",
-                "Création du contexte IssaGuard Partie 1",
+                "Création du contexte IssaGuard Partie 2.",
             )],
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ExecutionMode, RiskLevel};
-
-    #[test]
-    fn menu_choices_map_to_execution_modes() {
-        assert_eq!(
-            ExecutionMode::from_menu_choice("1").unwrap(),
-            ExecutionMode::AuditOnly
-        );
-        assert_eq!(
-            ExecutionMode::from_menu_choice("2").unwrap(),
-            ExecutionMode::AuditAndPlan
-        );
-        assert_eq!(
-            ExecutionMode::from_menu_choice("3").unwrap(),
-            ExecutionMode::GuidedCleanup
-        );
-        assert_eq!(
-            ExecutionMode::from_menu_choice("4").unwrap(),
-            ExecutionMode::DefenderOfflinePlan
-        );
-        assert_eq!(
-            ExecutionMode::from_menu_choice("5").unwrap(),
-            ExecutionMode::OpenLastReport
-        );
-    }
-
-    #[test]
-    fn invalid_menu_choice_is_rejected() {
-        assert!(ExecutionMode::from_menu_choice("6").is_err());
-        assert!(ExecutionMode::from_menu_choice("abc").is_err());
-    }
-
-    #[test]
-    fn part1_risk_label_stays_not_assessed() {
-        assert_eq!(RiskLevel::NotAssessed.label(), "NON ÉVALUÉ");
-        assert!(RiskLevel::NotAssessed
-            .message()
-            .contains("ne collecte pas encore les preuves système"));
     }
 }

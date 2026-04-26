@@ -7,11 +7,17 @@ mod windows;
 
 use crate::app::App;
 
+/// Point d'entrée principal.
+/// Règle de sécurité : si une erreur survient, on s'arrête proprement.
+/// Aucune action destructive ne doit être faite silencieusement.
 fn main() {
     if let Err(error) = App::default().run() {
-        eprintln!("\n[ERREUR] IssaGuard s'est arrêté proprement.");
+        eprintln!();
+        eprintln!("[ERREUR] IssaGuard s'est arrêté proprement.");
         eprintln!("Détail : {error}");
-        eprintln!("\nAucune action destructive n'a été effectuée par cette version Partie 1.");
+        eprintln!();
+        eprintln!("Aucune suppression définitive n'a été effectuée.");
+        eprintln!("Aucun domaine suspect n'a été contacté.");
         std::process::exit(1);
     }
 }

@@ -1,18 +1,19 @@
-use serde::{Deserialize, Serialize};
+use crate::core::model::ToolSignatureInfo;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolSignatureInfo {
-    pub tool_name: String,
-    pub version: String,
-    pub build_profile: String,
-    pub target_os: String,
-}
-
+/// Informations locales sur l'outil.
+/// Ce n'est pas une signature cryptographique.
+/// But : documenter ce qui a généré le rapport.
 pub fn current_tool_signature(version: &str) -> ToolSignatureInfo {
     ToolSignatureInfo {
         tool_name: "IssaGuard".into(),
         version: version.into(),
-        build_profile: option_env!("PROFILE").unwrap_or("unknown").into(),
+        build_profile: if cfg!(debug_assertions) {
+            "debug".into()
+        } else {
+            "release".into()
+        },
         target_os: std::env::consts::OS.into(),
+        target_arch: std::env::consts::ARCH.into(),
+        executable_path: std::env::current_exe().ok(),
     }
 }

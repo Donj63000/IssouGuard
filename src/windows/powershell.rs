@@ -3,18 +3,16 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct PowerShellOutput {
     pub status_code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
 }
 
-#[allow(dead_code)]
+/// Exécute une commande PowerShell locale et capture stdout/stderr.
+/// Partie 2 : fonction prête mais peu utilisée.
+/// Règle : ne jamais passer d'URL suspecte à cette fonction.
 pub fn run_powershell_capture(command: &str) -> AppResult<PowerShellOutput> {
-    #[cfg(not(target_os = "windows"))]
-    let _ = command;
-
     #[cfg(target_os = "windows")]
     let mut cmd = {
         let mut c = Command::new("powershell.exe");
@@ -30,6 +28,7 @@ pub fn run_powershell_capture(command: &str) -> AppResult<PowerShellOutput> {
 
     #[cfg(not(target_os = "windows"))]
     let mut cmd = {
+        let _ = command;
         let mut c = Command::new("sh");
         c.args([
             "-c",
@@ -39,6 +38,7 @@ pub fn run_powershell_capture(command: &str) -> AppResult<PowerShellOutput> {
     };
 
     let output = cmd.output()?;
+
     let result = PowerShellOutput {
         status_code: output.status.code(),
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -54,4 +54,9 @@ pub fn run_powershell_capture(command: &str) -> AppResult<PowerShellOutput> {
             result.stderr.trim()
         )))
     }
+}
+
+/// Échappement simple pour intégrer une chaîne dans PowerShell entre quotes simples.
+pub fn quote_ps_single(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }

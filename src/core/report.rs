@@ -1,7 +1,8 @@
-use crate::core::model::{AppResult, IssaError, ReportData};
+use crate::core::model::{AppResult, IssaError, ReportData, WindowsPaths};
 use crate::core::risk_score::RiskScoreEngine;
 use serde::Serialize;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -24,31 +25,48 @@ const REQUIRED_REPORT_FILES: &[&str] = &[
     "runmru_hits.txt",
     "architecture.txt",
     "iocs.txt",
+    "paths.txt",
     "safety_policy.txt",
+    "issaguard.log",
 ];
 
-pub fn default_reports_root() -> PathBuf {
-    if let Ok(userprofile) = std::env::var("USERPROFILE") {
-        return PathBuf::from(userprofile).join("Desktop");
-    }
-
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join("Desktop");
-    }
-
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
-
-pub fn create_report_dir() -> AppResult<PathBuf> {
+pub fn create_report_dir(paths: &WindowsPaths) -> AppResult<PathBuf> {
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let dir = default_reports_root().join(format!("IssaGuard-Report-{timestamp}"));
+    let dir = paths
+        .desktop_dir
+        .join(format!("IssaGuard-Report-{timestamp}"));
+
     fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+pub fn write_log_line(report_dir: &Path, message: impl AsRef<str>) -> AppResult<()> {
+    fs::create_dir_all(report_dir)?;
+
+    let log_path = report_dir.join("issaguard.log");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)?;
+
+    writeln!(
+        file,
+        "{} | {}",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        message.as_ref()
+    )?;
+
+    Ok(())
 }
 
 pub fn write_report_package(report: &ReportData) -> AppResult<()> {
     fs::create_dir_all(&report.metadata.report_dir)?;
     ensure_placeholder_files(&report.metadata.report_dir)?;
+
+    write_log_line(
+        &report.metadata.report_dir,
+        "Écriture du package de rapport Partie 2",
+    )?;
 
     write_json(report.metadata.report_dir.join("report.json"), report)?;
     write_json(
@@ -59,15 +77,17 @@ pub fn write_report_package(report: &ReportData) -> AppResult<()> {
         report.metadata.report_dir.join("actions.json"),
         &report.actions,
     )?;
+
     write_json(
         report.metadata.report_dir.join("manifest.json"),
         &crate::core::quarantine::QuarantineManifest::empty(),
     )?;
+
     write_json(
         report.metadata.report_dir.join("rollback.json"),
         &serde_json::json!({
             "version": &report.metadata.tool_version,
-            "note": "Partie 1 : aucune modification système, donc aucun rollback nécessaire.",
+            "note": "Partie 2 : aucune modification système, donc aucun rollback nécessaire.",
             "entries": []
         }),
     )?;
@@ -76,36 +96,48 @@ pub fn write_report_package(report: &ReportData) -> AppResult<()> {
         report.metadata.report_dir.join("report.txt"),
         render_report_txt(report),
     )?;
+
     fs::write(
         report.metadata.report_dir.join("timeline.txt"),
         render_timeline_txt(report),
     )?;
+
     fs::write(
         report.metadata.report_dir.join("architecture.txt"),
         render_architecture_txt(),
     )?;
+
     fs::write(
         report.metadata.report_dir.join("iocs.txt"),
         render_iocs_txt(report),
     )?;
+
+    fs::write(
+        report.metadata.report_dir.join("paths.txt"),
+        render_paths_txt(report),
+    )?;
+
     fs::write(
         report.metadata.report_dir.join("safety_policy.txt"),
         render_safety_policy_txt(report),
     )?;
 
+    write_log_line(&report.metadata.report_dir, "Rapport Partie 2 terminé")?;
     Ok(())
 }
 
 fn ensure_placeholder_files(report_dir: &Path) -> AppResult<()> {
     for file in REQUIRED_REPORT_FILES {
         let path = report_dir.join(file);
+
         if !path.exists() {
             fs::write(
                 path,
-                "IssaGuard Partie 1 : fichier réservé. Le contenu réel sera ajouté par les parties suivantes.\n",
+                "IssaGuard Partie 2 : fichier réservé. Le contenu réel sera ajouté par les parties suivantes.\n",
             )?;
         }
     }
+
     Ok(())
 }
 
@@ -121,60 +153,103 @@ fn render_report_txt(report: &ReportData) -> String {
     let suspicious = RiskScoreEngine::count_suspicious(&report.findings);
 
     let mut out = String::new();
+
     out.push_str("IssaGuard — Faux Claude Code / mshta Incident Response\n");
     out.push_str("========================================================\n\n");
+
+    out.push_str("Résumé\n");
+    out.push_str("------\n");
     out.push_str(&format!(
         "Version outil        : {}\n",
         report.metadata.tool_version
     ));
     out.push_str(&format!(
-        "Date génération     : {}\n",
+        "Date génération      : {}\n",
         report.metadata.generated_at
     ));
     out.push_str(&format!(
-        "Machine             : {}\n",
+        "Machine              : {}\n",
         report.metadata.hostname
     ));
     out.push_str(&format!(
-        "Utilisateur         : {}\n",
+        "Utilisateur          : {}\n",
         report.metadata.username
     ));
     out.push_str(&format!(
-        "Admin               : {}\n",
+        "Admin                : {}\n",
         if report.metadata.is_admin {
             "oui"
         } else {
             "non"
         }
     ));
-    out.push_str(&format!("Mode                : {}\n", report.metadata.mode));
     out.push_str(&format!(
-        "Périmètre score     : {:?}\n",
+        "Mode                 : {}\n",
+        report.metadata.mode
+    ));
+    out.push_str(&format!(
+        "Périmètre score      : {:?}\n",
         report.metadata.scope
     ));
     out.push_str(&format!(
-        "Dossier rapport     : {}\n\n",
+        "Dossier rapport      : {}\n\n",
         report.metadata.report_dir.display()
     ));
 
     out.push_str("Verdict\n");
     out.push_str("-------\n");
     out.push_str(&format!(
-        "Risque              : {}\n",
+        "Risque               : {}\n",
         report.risk_level.label()
     ));
-    out.push_str(&format!("Message             : {}\n", report.risk_message));
-    out.push_str(&format!("Preuves fortes      : {}\n", strong));
-    out.push_str(&format!("Preuves faibles     : {}\n", weak));
-    out.push_str(&format!("Suspicion           : {}\n\n", suspicious));
+    out.push_str(&format!("Message              : {}\n", report.risk_message));
+    out.push_str(&format!("Preuves fortes       : {}\n", strong));
+    out.push_str(&format!("Preuves faibles      : {}\n", weak));
+    out.push_str(&format!("Suspicion            : {}\n\n", suspicious));
 
     out.push_str("Important\n");
     out.push_str("---------\n");
-    out.push_str("Cette Partie 1 met en place le cadrage, les règles de sécurité, les IOC, les modes et l'architecture.\n");
-    out.push_str("Elle ne réalise pas encore l'audit système complet. Ne pas interpréter ce rapport comme une preuve que le PC est sain.\n\n");
+    out.push_str(
+        "Cette Partie 2 prépare le socle technique : erreurs, chemins, rapport, logs, admin.\n",
+    );
+    out.push_str("Elle ne réalise pas encore l'audit système complet.\n");
+    out.push_str("Ne pas interpréter ce rapport comme une preuve que le PC est sain.\n\n");
+
+    out.push_str("Signature outil\n");
+    out.push_str("---------------\n");
+    out.push_str(&format!(
+        "Nom                  : {}\n",
+        report.signature.tool_name
+    ));
+    out.push_str(&format!(
+        "Version              : {}\n",
+        report.signature.version
+    ));
+    out.push_str(&format!(
+        "Profil build         : {}\n",
+        report.signature.build_profile
+    ));
+    out.push_str(&format!(
+        "OS cible             : {}\n",
+        report.signature.target_os
+    ));
+    out.push_str(&format!(
+        "Architecture         : {}\n",
+        report.signature.target_arch
+    ));
+    out.push_str(&format!(
+        "Exécutable           : {}\n\n",
+        report
+            .signature
+            .executable_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "inconnu".into())
+    ));
 
     out.push_str("Constats\n");
     out.push_str("--------\n");
+
     if report.findings.is_empty() {
         out.push_str("Aucun constat enregistré.\n");
     } else {
@@ -189,6 +264,7 @@ fn render_report_txt(report: &ReportData) -> String {
                 finding.confidence,
                 if finding.affects_risk { "oui" } else { "non" }
             ));
+
             if let Some(action) = &finding.recommended_action {
                 out.push_str(&format!("  Action recommandée : {}\n", action));
             }
@@ -197,19 +273,21 @@ fn render_report_txt(report: &ReportData) -> String {
 
     out.push_str("\nActions\n");
     out.push_str("-------\n");
+
     if report.actions.is_empty() {
         out.push_str("Aucune action système effectuée.\n");
     } else {
         for action in &report.actions {
             out.push_str(&format!(
-                "- {:?} | {} | statut={:?} | réversible={}\n  Raison : {}\n",
-                action.timestamp, action.action, action.status, action.reversible, action.reason
+                "- {} | statut={:?} | réversible={}\n  Raison : {}\n",
+                action.action, action.status, action.reversible, action.reason
             ));
         }
     }
 
     out.push_str("\nLimites\n");
     out.push_str("-------\n");
+
     for limitation in &report.safety_policy.limitations {
         out.push_str(&format!("- {}\n", limitation));
     }
@@ -219,6 +297,7 @@ fn render_report_txt(report: &ReportData) -> String {
 
 fn render_timeline_txt(report: &ReportData) -> String {
     let mut out = String::new();
+
     out.push_str("Timeline IssaGuard\n");
     out.push_str("==================\n\n");
 
@@ -239,44 +318,122 @@ fn render_iocs_txt(report: &ReportData) -> String {
     out.push_str("IOC cadrés pour IssaGuard\n");
     out.push_str("=========================\n\n");
 
-    out.push_str("URLs/domaines\n");
-    for item in iocs.urls.iter().chain(iocs.domains.iter()) {
+    out.push_str("URLs\n");
+    out.push_str("----\n");
+    for item in &iocs.urls {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nProcessus / commandes\n");
-    for item in iocs
-        .process_patterns
-        .iter()
-        .chain(iocs.command_patterns.iter())
-    {
+    out.push_str("\nDomaines\n");
+    out.push_str("--------\n");
+    for item in &iocs.domains {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nFichiers / extensions\n");
-    for item in iocs
-        .suspicious_file_names
-        .iter()
-        .chain(iocs.suspicious_extensions.iter())
-    {
+    out.push_str("\nProcessus\n");
+    out.push_str("---------\n");
+    for item in &iocs.process_patterns {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nEmplacements\n");
-    for item in iocs
-        .suspicious_locations
-        .iter()
-        .chain(iocs.persistence_locations.iter())
-    {
+    out.push_str("\nCommandes\n");
+    out.push_str("---------\n");
+    for item in &iocs.command_patterns {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nÉvénements Defender\n");
+    out.push_str("\nNoms de fichiers suspects\n");
+    out.push_str("-------------------------\n");
+    for item in &iocs.suspicious_file_names {
+        out.push_str(&format!("- {}\n", item));
+    }
+
+    out.push_str("\nExtensions suspectes\n");
+    out.push_str("--------------------\n");
+    for item in &iocs.suspicious_extensions {
+        out.push_str(&format!("- {}\n", item));
+    }
+
+    out.push_str("\nEmplacements à inspecter\n");
+    out.push_str("------------------------\n");
+    for item in &iocs.suspicious_locations {
+        out.push_str(&format!("- {}\n", item));
+    }
+
+    out.push_str("\nPersistances à inspecter\n");
+    out.push_str("------------------------\n");
+    for item in &iocs.persistence_locations {
+        out.push_str(&format!("- {}\n", item));
+    }
+
+    out.push_str("\nÉvénements Defender utiles\n");
+    out.push_str("-------------------------\n");
     for id in &iocs.defender_event_ids {
         out.push_str(&format!("- {}\n", id));
     }
 
     out
+}
+
+fn render_paths_txt(report: &ReportData) -> String {
+    let p = &report.system_paths;
+    let mut out = String::new();
+
+    out.push_str("Chemins locaux résolus\n");
+    out.push_str("======================\n\n");
+
+    out.push_str(&format!(
+        "current_dir          : {}\n",
+        p.current_dir.display()
+    ));
+    out.push_str(&format!(
+        "executable_path      : {}\n",
+        optional_path(&p.executable_path)
+    ));
+    out.push_str(&format!(
+        "user_profile         : {}\n",
+        optional_path(&p.user_profile)
+    ));
+    out.push_str(&format!(
+        "desktop_dir          : {}\n",
+        p.desktop_dir.display()
+    ));
+    out.push_str(&format!(
+        "downloads_dir        : {}\n",
+        optional_path(&p.downloads_dir)
+    ));
+    out.push_str(&format!(
+        "temp_dir             : {}\n",
+        p.temp_dir.display()
+    ));
+    out.push_str(&format!(
+        "local_appdata        : {}\n",
+        optional_path(&p.local_appdata)
+    ));
+    out.push_str(&format!(
+        "roaming_appdata      : {}\n",
+        optional_path(&p.roaming_appdata)
+    ));
+    out.push_str(&format!(
+        "program_data         : {}\n",
+        optional_path(&p.program_data)
+    ));
+    out.push_str(&format!(
+        "user_startup_dir     : {}\n",
+        optional_path(&p.user_startup_dir)
+    ));
+    out.push_str(&format!(
+        "machine_startup_dir  : {}\n",
+        optional_path(&p.machine_startup_dir)
+    ));
+
+    out
+}
+
+fn optional_path(path: &Option<PathBuf>) -> String {
+    path.as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "inconnu".into())
 }
 
 fn render_safety_policy_txt(report: &ReportData) -> String {
@@ -290,6 +447,8 @@ fn render_safety_policy_txt(report: &ReportData) -> String {
     }
 
     out.push_str("\nLimites\n");
+    out.push_str("-------\n");
+
     for limitation in &report.safety_policy.limitations {
         out.push_str(&format!("- {}\n", limitation));
     }
@@ -306,12 +465,14 @@ src/
   app.rs
   tui.rs
   core/
+    mod.rs
     model.rs
     risk_score.rs
     report.rs
     timeline.rs
     quarantine.rs
   collectors/
+    mod.rs
     defender.rs
     processes.rs
     files.rs
@@ -321,37 +482,65 @@ src/
     powershell_history.rs
     run_mru.rs
   remediation/
+    mod.rs
     defender.rs
     process_kill.rs
     persistence.rs
     quarantine.rs
     offline_scan.rs
   windows/
+    mod.rs
     admin.rs
+    paths.rs
     powershell.rs
     signature.rs
 
-Modes
-=====
-1. Audit seul : zéro modification, preuves, rapport JSON/TXT, score.
-2. Audit + plan : zéro modification, corrections proposées, risque/action.
-3. Nettoyage guidé : confirmation par action, quarantaine, rollback.
-4. Defender Offline : proposer/planifier, jamais silencieux.
-5. Ouvrir dernier rapport.
+Partie 2
+========
 
-Positionnement
-==============
-IssaGuard ne remplace pas Defender : il l'orchestre, collecte des preuves,
-détecte des traces spécifiques, nettoie localement/réversiblement et indique le
-risque restant. Aucun compte ne doit être considéré sûr si une exfiltration a
-potentiellement déjà eu lieu.
+Objectif :
+- socle Rust propre ;
+- erreurs centralisées ;
+- création dossier rapport ;
+- logs locaux ;
+- résolution chemins Windows ;
+- détection administrateur ;
+- modules collecteurs/remédiation présents mais non actifs.
+
+Garanties Partie 2 :
+- pas de suppression ;
+- pas de quarantaine réelle ;
+- pas de modification Defender ;
+- pas de lecture mots de passe/cookies ;
+- pas de connexion aux IOC ;
+- pas de scan agressif ;
+- pas de promesse que la machine est saine.
+
+Modes prévus
+============
+
+1. Audit seul :
+   zéro modification, preuves, rapport JSON/TXT, score.
+
+2. Audit + plan :
+   zéro modification, corrections proposées, risque/action.
+
+3. Nettoyage guidé :
+   confirmation par action, journalisation, rollback, quarantaine.
+
+4. Defender Offline :
+   proposer/planifier, jamais silencieux.
+
+5. Ouvrir dernier rapport :
+   retrouver le dernier dossier IssaGuard sur le Bureau.
+
 "#;
 
     architecture.to_string()
 }
 
-pub fn latest_report_dir() -> AppResult<PathBuf> {
-    let root = default_reports_root();
+pub fn latest_report_dir(paths: &WindowsPaths) -> AppResult<PathBuf> {
+    let root = &paths.desktop_dir;
     let mut candidates = Vec::new();
 
     if root.exists() {
@@ -374,62 +563,13 @@ pub fn latest_report_dir() -> AppResult<PathBuf> {
 }
 
 pub fn open_latest_report_dir() -> AppResult<PathBuf> {
-    let path = latest_report_dir()?;
+    let paths = crate::windows::paths::resolve_system_paths();
+    let path = latest_report_dir(&paths)?;
 
     #[cfg(target_os = "windows")]
     {
         let _ = Command::new("explorer").arg(&path).spawn();
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = &path;
-    }
-
     Ok(path)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{write_report_package, REQUIRED_REPORT_FILES};
-    use crate::core::model::{ExecutionMode, ReportData, RiskAssessmentScope};
-    use std::fs;
-    use std::path::PathBuf;
-
-    fn unique_temp_report_dir() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "IssaGuard-Test-{}-{}",
-            std::process::id(),
-            chrono::Local::now()
-                .timestamp_nanos_opt()
-                .unwrap_or_default()
-        ))
-    }
-
-    #[test]
-    fn write_report_package_creates_expected_files() {
-        let report_dir = unique_temp_report_dir();
-        let report = ReportData::new(
-            "0.1.0-test",
-            report_dir.clone(),
-            false,
-            ExecutionMode::AuditOnly,
-            RiskAssessmentScope::ArchitectureOnly,
-        );
-
-        write_report_package(&report).unwrap();
-
-        for file in REQUIRED_REPORT_FILES {
-            assert!(
-                report_dir.join(file).is_file(),
-                "fichier de rapport manquant: {file}"
-            );
-        }
-
-        let report_txt = fs::read_to_string(report_dir.join("report.txt")).unwrap();
-        assert!(report_txt.contains("NON ÉVALUÉ"));
-        assert!(report_txt.contains("ne réalise pas encore l'audit système complet"));
-
-        fs::remove_dir_all(report_dir).unwrap();
-    }
 }
