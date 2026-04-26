@@ -1,0 +1,28 @@
+# Rust build output
+/target/
+
+# Local IDE/editor state
+/.idea/
+/.vscode/
+
+# Local contributor/agent instructions
+AGENTS.md
+agents.md
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Generated reports and logs
+IssaGuard-Report-*/
+*.log
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*~
