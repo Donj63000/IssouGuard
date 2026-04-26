@@ -1,5 +1,4 @@
-use crate::core::model::{AppResult, IssaError, ReportData, WindowsPaths};
-use crate::core::risk_score::RiskScoreEngine;
+use crate::core::model::{AppResult, IssaError, Report, WindowsPaths};
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -10,8 +9,12 @@ const REQUIRED_REPORT_FILES: &[&str] = &[
     "report.txt",
     "report.json",
     "timeline.txt",
+    "findings.txt",
     "findings.json",
+    "actions.txt",
     "actions.json",
+    "evidence_summary.txt",
+    "data_model.txt",
     "rollback.json",
     "manifest.json",
     "defender_before.txt",
@@ -35,7 +38,6 @@ pub fn create_report_dir(paths: &WindowsPaths) -> AppResult<PathBuf> {
     let dir = paths
         .desktop_dir
         .join(format!("IssaGuard-Report-{timestamp}"));
-
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -59,13 +61,15 @@ pub fn write_log_line(report_dir: &Path, message: impl AsRef<str>) -> AppResult<
     Ok(())
 }
 
-pub fn write_report_package(report: &ReportData) -> AppResult<()> {
+pub fn write_report_package(report: &Report) -> AppResult<()> {
+    report.validate()?;
+
     fs::create_dir_all(&report.metadata.report_dir)?;
     ensure_placeholder_files(&report.metadata.report_dir)?;
 
     write_log_line(
         &report.metadata.report_dir,
-        "Écriture du package de rapport Partie 2",
+        "Écriture du package de rapport Partie 3",
     )?;
 
     write_json(report.metadata.report_dir.join("report.json"), report)?;
@@ -78,51 +82,69 @@ pub fn write_report_package(report: &ReportData) -> AppResult<()> {
         &report.actions,
     )?;
 
-    write_json(
-        report.metadata.report_dir.join("manifest.json"),
-        &crate::core::quarantine::QuarantineManifest::empty(),
-    )?;
+    let manifest = crate::core::quarantine::QuarantineManifest::empty();
+    write_json(report.metadata.report_dir.join("manifest.json"), &manifest)?;
 
-    write_json(
-        report.metadata.report_dir.join("rollback.json"),
-        &serde_json::json!({
-            "version": &report.metadata.tool_version,
-            "note": "Partie 2 : aucune modification système, donc aucun rollback nécessaire.",
-            "entries": []
-        }),
-    )?;
+    let rollback = serde_json::json!({
+        "schema_version": &report.metadata.schema_version,
+        "tool_version": &report.metadata.tool_version,
+        "note": "Partie 3 : aucune modification système, donc aucun rollback nécessaire.",
+        "entries": []
+    });
 
-    fs::write(
+    write_json(report.metadata.report_dir.join("rollback.json"), &rollback)?;
+
+    write_text(
         report.metadata.report_dir.join("report.txt"),
         render_report_txt(report),
     )?;
 
-    fs::write(
+    write_text(
         report.metadata.report_dir.join("timeline.txt"),
         render_timeline_txt(report),
     )?;
 
-    fs::write(
+    write_text(
+        report.metadata.report_dir.join("findings.txt"),
+        render_findings_txt(report),
+    )?;
+
+    write_text(
+        report.metadata.report_dir.join("actions.txt"),
+        render_actions_txt(report),
+    )?;
+
+    write_text(
+        report.metadata.report_dir.join("evidence_summary.txt"),
+        render_evidence_summary_txt(report),
+    )?;
+
+    write_text(
+        report.metadata.report_dir.join("data_model.txt"),
+        render_data_model_txt(),
+    )?;
+
+    write_text(
         report.metadata.report_dir.join("architecture.txt"),
         render_architecture_txt(),
     )?;
 
-    fs::write(
+    write_text(
         report.metadata.report_dir.join("iocs.txt"),
         render_iocs_txt(report),
     )?;
 
-    fs::write(
+    write_text(
         report.metadata.report_dir.join("paths.txt"),
         render_paths_txt(report),
     )?;
 
-    fs::write(
+    write_text(
         report.metadata.report_dir.join("safety_policy.txt"),
         render_safety_policy_txt(report),
     )?;
 
-    write_log_line(&report.metadata.report_dir, "Rapport Partie 2 terminé")?;
+    write_log_line(&report.metadata.report_dir, "Rapport Partie 3 terminé")?;
     Ok(())
 }
 
@@ -133,7 +155,7 @@ fn ensure_placeholder_files(report_dir: &Path) -> AppResult<()> {
         if !path.exists() {
             fs::write(
                 path,
-                "IssaGuard Partie 2 : fichier réservé. Le contenu réel sera ajouté par les parties suivantes.\n",
+                "IssaGuard Partie 3 : fichier réservé. Le contenu réel sera ajouté par les collecteurs des parties suivantes.\n",
             )?;
         }
     }
@@ -147,11 +169,12 @@ fn write_json<T: Serialize>(path: PathBuf, value: &T) -> AppResult<()> {
     Ok(())
 }
 
-fn render_report_txt(report: &ReportData) -> String {
-    let strong = RiskScoreEngine::count_strong(&report.findings);
-    let weak = RiskScoreEngine::count_weak(&report.findings);
-    let suspicious = RiskScoreEngine::count_suspicious(&report.findings);
+fn write_text(path: PathBuf, contents: String) -> AppResult<()> {
+    fs::write(path, contents)?;
+    Ok(())
+}
 
+fn render_report_txt(report: &Report) -> String {
     let mut out = String::new();
 
     out.push_str("IssaGuard — Faux Claude Code / mshta Incident Response\n");
@@ -159,6 +182,10 @@ fn render_report_txt(report: &ReportData) -> String {
 
     out.push_str("Résumé\n");
     out.push_str("------\n");
+    out.push_str(&format!(
+        "Schéma rapport       : {}\n",
+        report.metadata.schema_version
+    ));
     out.push_str(&format!(
         "Version outil        : {}\n",
         report.metadata.tool_version
@@ -203,16 +230,33 @@ fn render_report_txt(report: &ReportData) -> String {
         report.risk_level.label()
     ));
     out.push_str(&format!("Message              : {}\n", report.risk_message));
-    out.push_str(&format!("Preuves fortes       : {}\n", strong));
-    out.push_str(&format!("Preuves faibles      : {}\n", weak));
-    out.push_str(&format!("Suspicion            : {}\n\n", suspicious));
+    out.push_str(&format!(
+        "Findings total       : {}\n",
+        report.counts.findings_total
+    ));
+    out.push_str(&format!(
+        "Findings risque      : {}\n",
+        report.counts.risk_findings_total
+    ));
+    out.push_str(&format!(
+        "Preuves fortes       : {}\n",
+        report.counts.strong_total
+    ));
+    out.push_str(&format!(
+        "Preuves faibles      : {}\n",
+        report.counts.weak_total
+    ));
+    out.push_str(&format!(
+        "Suspicion            : {}\n\n",
+        report.counts.suspicion_total
+    ));
 
     out.push_str("Important\n");
     out.push_str("---------\n");
+    out.push_str("Cette Partie 3 définit les données internes et renforce les rapports.\n");
     out.push_str(
-        "Cette Partie 2 prépare le socle technique : erreurs, chemins, rapport, logs, admin.\n",
+        "Elle ne réalise pas encore l'audit système complet. Le risque reste donc NON ÉVALUÉ.\n",
     );
-    out.push_str("Elle ne réalise pas encore l'audit système complet.\n");
     out.push_str("Ne pas interpréter ce rapport comme une preuve que le PC est sain.\n\n");
 
     out.push_str("Signature outil\n");
@@ -239,55 +283,19 @@ fn render_report_txt(report: &ReportData) -> String {
     ));
     out.push_str(&format!(
         "Exécutable           : {}\n\n",
-        report
-            .signature
-            .executable_path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "inconnu".into())
+        optional_path(&report.signature.executable_path)
     ));
 
-    out.push_str("Constats\n");
-    out.push_str("--------\n");
+    out.push_str("Actions recommandées à ce stade\n");
+    out.push_str("--------------------------------\n");
+    out.push_str("- Continuer avec la Partie 4 pour collecter les preuves Defender.\n");
+    out.push_str("- Ne pas relancer la commande mshta ni visiter les domaines IOC.\n");
+    out.push_str(
+        "- Ne pas conclure que les comptes sont sûrs tant que l'audit n'est pas terminé.\n\n",
+    );
 
-    if report.findings.is_empty() {
-        out.push_str("Aucun constat enregistré.\n");
-    } else {
-        for finding in &report.findings {
-            out.push_str(&format!(
-                "- [{}] {} — {}\n  Source : {}\n  Niveau : {} | Confiance : {} | Affecte risque : {}\n",
-                finding.id,
-                finding.title,
-                finding.description,
-                finding.source,
-                finding.evidence_level.label(),
-                finding.confidence,
-                if finding.affects_risk { "oui" } else { "non" }
-            ));
-
-            if let Some(action) = &finding.recommended_action {
-                out.push_str(&format!("  Action recommandée : {}\n", action));
-            }
-        }
-    }
-
-    out.push_str("\nActions\n");
+    out.push_str("Limites\n");
     out.push_str("-------\n");
-
-    if report.actions.is_empty() {
-        out.push_str("Aucune action système effectuée.\n");
-    } else {
-        for action in &report.actions {
-            out.push_str(&format!(
-                "- {} | statut={:?} | réversible={}\n  Raison : {}\n",
-                action.action, action.status, action.reversible, action.reason
-            ));
-        }
-    }
-
-    out.push_str("\nLimites\n");
-    out.push_str("-------\n");
-
     for limitation in &report.safety_policy.limitations {
         out.push_str(&format!("- {}\n", limitation));
     }
@@ -295,7 +303,128 @@ fn render_report_txt(report: &ReportData) -> String {
     out
 }
 
-fn render_timeline_txt(report: &ReportData) -> String {
+fn render_findings_txt(report: &Report) -> String {
+    let mut out = String::new();
+
+    out.push_str("Findings IssaGuard\n");
+    out.push_str("==================\n\n");
+
+    if report.findings.is_empty() {
+        out.push_str("Aucun finding enregistré.\n");
+        return out;
+    }
+
+    for finding in &report.findings {
+        out.push_str(&format!("{}\n", finding.short_line()));
+        out.push_str(&format!("  Catégorie : {:?}\n", finding.category));
+        out.push_str(&format!("  Source    : {}\n", finding.source));
+        out.push_str(&format!("  Détail    : {}\n", finding.description));
+
+        if let Some(artifact) = &finding.artifact {
+            out.push_str(&format!(
+                "  Artefact  : {:?} | {}\n",
+                artifact.artifact_type, artifact.display_name
+            ));
+        }
+
+        if !finding.related_iocs.is_empty() {
+            out.push_str(&format!(
+                "  IOC       : {}\n",
+                finding.related_iocs.join(", ")
+            ));
+        }
+
+        if !finding.tags.is_empty() {
+            out.push_str(&format!("  Tags      : {}\n", finding.tags.join(", ")));
+        }
+
+        if let Some(action) = &finding.recommended_action {
+            out.push_str(&format!("  Action    : {}\n", action));
+        }
+
+        if !finding.notes.is_empty() {
+            out.push_str(&format!("  Notes     : {}\n", finding.notes.join(" | ")));
+        }
+
+        out.push('\n');
+    }
+
+    out
+}
+
+fn render_actions_txt(report: &Report) -> String {
+    let mut out = String::new();
+
+    out.push_str("Actions IssaGuard\n");
+    out.push_str("=================\n\n");
+
+    if report.actions.is_empty() {
+        out.push_str("Aucune action système effectuée.\n");
+        return out;
+    }
+
+    for action in &report.actions {
+        out.push_str(&format!("[{}] {}\n", action.id, action.action));
+        out.push_str(&format!("  Mode          : {}\n", action.mode));
+        out.push_str(&format!("  Type          : {:?}\n", action.kind));
+        out.push_str(&format!("  Statut        : {:?}\n", action.status));
+        out.push_str(&format!(
+            "  Réversible    : {}\n",
+            if action.reversible { "oui" } else { "non" }
+        ));
+        out.push_str(&format!(
+            "  Confirmation  : {}\n",
+            if action.requires_confirmation {
+                "oui"
+            } else {
+                "non"
+            }
+        ));
+
+        if let Some(target) = &action.target {
+            out.push_str(&format!("  Cible         : {}\n", target));
+        }
+
+        out.push_str(&format!("  Raison        : {}\n", action.reason));
+
+        if let Some(rollback) = &action.rollback_hint {
+            out.push_str(&format!("  Rollback      : {}\n", rollback));
+        }
+
+        out.push('\n');
+    }
+
+    out
+}
+
+fn render_evidence_summary_txt(report: &Report) -> String {
+    let mut out = String::new();
+
+    out.push_str("Résumé des niveaux de preuve\n");
+    out.push_str("=============================\n\n");
+    out.push_str(&format!(
+        "Information     : {}\n",
+        report.counts.informational_total
+    ));
+    out.push_str(&format!(
+        "Suspicion       : {}\n",
+        report.counts.suspicion_total
+    ));
+    out.push_str(&format!("Preuve faible   : {}\n", report.counts.weak_total));
+    out.push_str(&format!(
+        "Preuve forte    : {}\n",
+        report.counts.strong_total
+    ));
+    out.push_str(&format!(
+        "Affecte risque  : {}\n\n",
+        report.counts.risk_findings_total
+    ));
+    out.push_str("Rappel : Partie 3 = aucun audit réel. Ces compteurs décrivent seulement le socle et les modèles.\n");
+
+    out
+}
+
+fn render_timeline_txt(report: &Report) -> String {
     let mut out = String::new();
 
     out.push_str("Timeline IssaGuard\n");
@@ -303,15 +432,15 @@ fn render_timeline_txt(report: &ReportData) -> String {
 
     for event in &report.timeline {
         out.push_str(&format!(
-            "{} | {} | {}\n",
-            event.timestamp, event.title, event.details
+            "{} | {} | {:?} | {} | {}\n",
+            event.timestamp, event.id, event.kind, event.title, event.details
         ));
     }
 
     out
 }
 
-fn render_iocs_txt(report: &ReportData) -> String {
+fn render_iocs_txt(report: &Report) -> String {
     let iocs = &report.iocs;
     let mut out = String::new();
 
@@ -342,8 +471,8 @@ fn render_iocs_txt(report: &ReportData) -> String {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nNoms de fichiers suspects\n");
-    out.push_str("-------------------------\n");
+    out.push_str("\nFichiers suspects\n");
+    out.push_str("-----------------\n");
     for item in &iocs.suspicious_file_names {
         out.push_str(&format!("- {}\n", item));
     }
@@ -375,13 +504,12 @@ fn render_iocs_txt(report: &ReportData) -> String {
     out
 }
 
-fn render_paths_txt(report: &ReportData) -> String {
+fn render_paths_txt(report: &Report) -> String {
     let p = &report.system_paths;
     let mut out = String::new();
 
     out.push_str("Chemins locaux résolus\n");
     out.push_str("======================\n\n");
-
     out.push_str(&format!(
         "current_dir          : {}\n",
         p.current_dir.display()
@@ -436,7 +564,7 @@ fn optional_path(path: &Option<PathBuf>) -> String {
         .unwrap_or_else(|| "inconnu".into())
 }
 
-fn render_safety_policy_txt(report: &ReportData) -> String {
+fn render_safety_policy_txt(report: &Report) -> String {
     let mut out = String::new();
 
     out.push_str("Règles de sécurité IssaGuard\n");
@@ -456,8 +584,51 @@ fn render_safety_policy_txt(report: &ReportData) -> String {
     out
 }
 
+fn render_data_model_txt() -> String {
+    r#"Modèles de données Partie 3
+============================
+
+Finding
+-------
+Représente un constat. Il peut être purement informatif ou affecter le risque.
+Champs importants : id, catégorie, titre, description, niveau de preuve, source,
+artefact, IOC liés, tags, confiance, action recommandée.
+
+EvidenceLevel
+-------------
+- Informational : information utile, ne modifie pas le score.
+- Suspicion     : signal faible à vérifier.
+- Weak          : preuve faible, jamais suffisante seule pour une action destructive.
+- Strong        : preuve forte, peut faire monter le risque.
+
+RiskLevel
+---------
+- NON ÉVALUÉ : pas assez de preuves collectées.
+- VERT       : aucune preuve locale dans le périmètre audité.
+- ORANGE     : exécution probable/tentative bloquée sans persistance évidente.
+- ROUGE      : compromission probable ou traces fortes.
+
+ActionRecord
+------------
+Journalise une action prévue, ignorée, réussie ou échouée. Toute remédiation future
+doit indiquer la cible, la raison, le statut, la réversibilité et le rollback.
+
+TimelineEvent
+-------------
+Journal chronologique des étapes : application, collecteurs, findings, actions,
+rapport et sécurité.
+
+Report
+------
+Structure centrale sérialisée en report.json. Contient métadonnées, score,
+compteurs, politique de sécurité, IOC, chemins locaux, signature outil,
+findings, actions et timeline.
+"#
+    .to_string()
+}
+
 fn render_architecture_txt() -> String {
-    let architecture = r#"Arborescence cible IssaGuard
+    r#"Arborescence cible IssaGuard
 ===========================
 
 src/
@@ -495,48 +666,12 @@ src/
     powershell.rs
     signature.rs
 
-Partie 2
+Partie 3
 ========
-
-Objectif :
-- socle Rust propre ;
-- erreurs centralisées ;
-- création dossier rapport ;
-- logs locaux ;
-- résolution chemins Windows ;
-- détection administrateur ;
-- modules collecteurs/remédiation présents mais non actifs.
-
-Garanties Partie 2 :
-- pas de suppression ;
-- pas de quarantaine réelle ;
-- pas de modification Defender ;
-- pas de lecture mots de passe/cookies ;
-- pas de connexion aux IOC ;
-- pas de scan agressif ;
-- pas de promesse que la machine est saine.
-
-Modes prévus
-============
-
-1. Audit seul :
-   zéro modification, preuves, rapport JSON/TXT, score.
-
-2. Audit + plan :
-   zéro modification, corrections proposées, risque/action.
-
-3. Nettoyage guidé :
-   confirmation par action, journalisation, rollback, quarantaine.
-
-4. Defender Offline :
-   proposer/planifier, jamais silencieux.
-
-5. Ouvrir dernier rapport :
-   retrouver le dernier dossier IssaGuard sur le Bureau.
-
-"#;
-
-    architecture.to_string()
+Objectif : données internes et rapports robustes.
+Cette étape ne collecte pas encore les preuves système réelles.
+"#
+    .to_string()
 }
 
 pub fn latest_report_dir(paths: &WindowsPaths) -> AppResult<PathBuf> {

@@ -3,10 +3,13 @@ use crate::core::model::{EvidenceLevel, Finding, RiskAssessmentScope, RiskLevel}
 pub struct RiskScoreEngine;
 
 impl RiskScoreEngine {
-    /// Dans la Partie 2, le périmètre est FoundationOnly.
-    /// On retourne volontairement NON ÉVALUÉ pour éviter un faux sentiment de sécurité.
+    /// Partie 3 : tant que le périmètre est DataAndReportOnly, le score reste NON ÉVALUÉ.
+    /// Le scoring Vert/Orange/Rouge sera activé quand les collecteurs réels produiront des preuves.
     pub fn evaluate(scope: RiskAssessmentScope, findings: &[Finding]) -> RiskLevel {
-        if scope == RiskAssessmentScope::FoundationOnly {
+        if matches!(
+            scope,
+            RiskAssessmentScope::FoundationOnly | RiskAssessmentScope::DataAndReportOnly
+        ) {
             return RiskLevel::NotAssessed;
         }
 
@@ -19,17 +22,10 @@ impl RiskScoreEngine {
             return RiskLevel::Red;
         }
 
-        if risk_findings
-            .iter()
-            .any(|f| f.tags.iter().any(|t| t == "risk:orange"))
-        {
-            return RiskLevel::Orange;
-        }
-
-        if risk_findings
-            .iter()
-            .any(|f| matches!(f.evidence_level, EvidenceLevel::Strong))
-        {
+        if risk_findings.iter().any(|f| {
+            f.tags.iter().any(|t| t == "risk:orange")
+                || matches!(f.evidence_level, EvidenceLevel::Strong)
+        }) {
             return RiskLevel::Orange;
         }
 

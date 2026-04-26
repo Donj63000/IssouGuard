@@ -8,8 +8,7 @@ mod windows;
 use crate::app::App;
 
 /// Point d'entrée principal.
-/// Règle de sécurité : si une erreur survient, on s'arrête proprement.
-/// Aucune action destructive ne doit être faite silencieusement.
+/// En cas d'erreur, l'outil s'arrête proprement et rappelle les garanties.
 fn main() {
     if let Err(error) = App::default().run() {
         eprintln!();

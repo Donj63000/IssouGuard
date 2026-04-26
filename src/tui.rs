@@ -1,5 +1,4 @@
-use crate::core::model::{AppResult, ExecutionMode, ReportData};
-use crate::core::risk_score::RiskScoreEngine;
+use crate::core::model::{AppResult, ExecutionMode, Report};
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -8,7 +7,7 @@ pub fn print_banner(version: &str) {
     println!("========================================================");
     println!("Version : {version}");
     println!();
-    println!("Partie 2 : socle Rust compilable, erreurs, chemins Windows, logs locaux, admin.");
+    println!("Partie 3 : modèles de données internes et rapports robustes.");
     println!("Aucune suppression. Aucun téléchargement. Aucun contact avec les domaines suspects.");
     println!();
 }
@@ -31,18 +30,12 @@ pub fn prompt_mode() -> AppResult<ExecutionMode> {
 
         match ExecutionMode::from_menu_choice(&input) {
             Ok(mode) => return Ok(mode),
-            Err(_) => {
-                println!("Choix invalide. Saisis 1, 2, 3, 4 ou 5.");
-            }
+            Err(_) => println!("Choix invalide. Saisis 1, 2, 3, 4 ou 5."),
         }
     }
 }
 
-pub fn print_result_summary(report: &ReportData) {
-    let strong = RiskScoreEngine::count_strong(&report.findings);
-    let weak = RiskScoreEngine::count_weak(&report.findings);
-    let suspicious = RiskScoreEngine::count_suspicious(&report.findings);
-
+pub fn print_result_summary(report: &Report) {
     println!();
     println!("Rapport créé");
     println!("============");
@@ -59,22 +52,26 @@ pub fn print_result_summary(report: &ReportData) {
     println!("Risque  : {}", report.risk_level.label());
     println!("Message : {}", report.risk_message);
     println!();
-    println!("Preuves incident affectant le score :");
-    println!("  - fortes     : {strong}");
-    println!("  - faibles    : {weak}");
-    println!("  - suspicions : {suspicious}");
+
+    println!("Compteurs de findings :");
+    println!("  - total      : {}", report.counts.findings_total);
+    println!("  - risque     : {}", report.counts.risk_findings_total);
+    println!("  - fortes     : {}", report.counts.strong_total);
+    println!("  - faibles    : {}", report.counts.weak_total);
+    println!("  - suspicions : {}", report.counts.suspicion_total);
     println!();
+
     println!("Fichiers utiles dans le rapport :");
-    println!("  - report.txt");
-    println!("  - report.json");
-    println!("  - paths.txt");
-    println!("  - safety_policy.txt");
-    println!("  - architecture.txt");
+    println!("  - report.txt / report.json");
+    println!("  - findings.txt / findings.json");
+    println!("  - actions.txt / actions.json");
+    println!("  - timeline.txt");
+    println!("  - evidence_summary.txt");
+    println!("  - data_model.txt");
     println!("  - issaguard.log");
     println!();
-    println!(
-        "Note : cette Partie 2 prépare le socle. L'audit réel arrive dans les parties suivantes."
-    );
+
+    println!("Note : cette Partie 3 ne fait pas encore l'audit réel. C'est normal que le risque soit NON ÉVALUÉ.");
 }
 
 pub fn print_opened_report(path: &Path) {

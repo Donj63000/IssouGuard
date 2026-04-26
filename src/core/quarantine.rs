@@ -2,9 +2,8 @@ use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Partie 2 : seulement le modèle.
+/// Partie 3 : modèle seulement.
 /// La quarantaine réelle sera implémentée plus tard.
-/// Règle : jamais de suppression définitive ; déplacement réversible + manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuarantineManifestEntry {
     pub original_path: PathBuf,
@@ -21,12 +20,14 @@ pub struct QuarantineManifestEntry {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QuarantineManifest {
+    pub schema_version: String,
     pub entries: Vec<QuarantineManifestEntry>,
 }
 
 impl QuarantineManifest {
     pub fn empty() -> Self {
         Self {
+            schema_version: "3".into(),
             entries: Vec::new(),
         }
     }

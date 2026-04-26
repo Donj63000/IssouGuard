@@ -2,8 +2,15 @@ use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub type AppResult<T> = Result<T, IssaError>;
+
+/// Alias gardé pour compatibilité avec les parties précédentes.
+pub type ReportData = Report;
+
+static ACTION_COUNTER: AtomicUsize = AtomicUsize::new(1);
+static TIMELINE_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Debug, thiserror::Error)]
 pub enum IssaError {
@@ -18,6 +25,9 @@ pub enum IssaError {
 
     #[error("commande PowerShell échouée : {0}")]
     PowerShell(String),
+
+    #[error("rapport invalide : {0}")]
+    InvalidReport(String),
 
     #[error("aucun rapport IssaGuard trouvé sur le Bureau")]
     NoReportFound,
@@ -66,6 +76,13 @@ impl fmt::Display for ExecutionMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RiskAssessmentScope {
+    FoundationOnly,
+    DataAndReportOnly,
+    AuditEvidence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RiskLevel {
     NotAssessed,
     Green,
@@ -86,7 +103,7 @@ impl RiskLevel {
     pub fn message(self) -> &'static str {
         match self {
             Self::NotAssessed => {
-                "Score non calculé : cette étape prépare le socle mais ne collecte pas encore les preuves système."
+                "Score non calculé : cette étape définit les données et les rapports, mais ne collecte pas encore les preuves système."
             }
             Self::Green => {
                 "Aucune preuve locale d'exécution ou de persistance suspecte dans le périmètre audité. Scan Defender recommandé."
@@ -101,13 +118,13 @@ impl RiskLevel {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RiskAssessmentScope {
-    FoundationOnly,
-    AuditEvidence,
+impl fmt::Display for RiskLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum EvidenceLevel {
     Informational,
     Suspicion,
@@ -124,11 +141,22 @@ impl EvidenceLevel {
             Self::Strong => "preuve forte",
         }
     }
+
+    pub fn affects_incident_risk(self) -> bool {
+        !matches!(self, Self::Informational)
+    }
+}
+
+impl fmt::Display for EvidenceLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FindingCategory {
     Architecture,
+    DataModel,
     SafetyPolicy,
     IocDefinition,
     PathResolution,
@@ -143,6 +171,87 @@ pub enum FindingCategory {
     PowerShellHistory,
     RunMru,
     RemediationPlan,
+    ReportGeneration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArtifactType {
+    Url,
+    Domain,
+    Process,
+    CommandLine,
+    File,
+    RegistryValue,
+    ScheduledTask,
+    Service,
+    DefenderThreat,
+    EventLog,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactRef {
+    pub artifact_type: ArtifactType,
+    pub display_name: String,
+    pub path: Option<PathBuf>,
+    pub command_line: Option<String>,
+    pub registry_key: Option<String>,
+    pub registry_value_name: Option<String>,
+    pub url_or_domain: Option<String>,
+    pub sha256: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub created_at: Option<DateTime<Local>>,
+    pub modified_at: Option<DateTime<Local>>,
+}
+
+impl ArtifactRef {
+    pub fn new(artifact_type: ArtifactType, display_name: impl Into<String>) -> Self {
+        Self {
+            artifact_type,
+            display_name: display_name.into(),
+            path: None,
+            command_line: None,
+            registry_key: None,
+            registry_value_name: None,
+            url_or_domain: None,
+            sha256: None,
+            size_bytes: None,
+            created_at: None,
+            modified_at: None,
+        }
+    }
+
+    pub fn command_line(display_name: impl Into<String>, command_line: impl Into<String>) -> Self {
+        Self {
+            artifact_type: ArtifactType::CommandLine,
+            display_name: display_name.into(),
+            path: None,
+            command_line: Some(command_line.into()),
+            registry_key: None,
+            registry_value_name: None,
+            url_or_domain: None,
+            sha256: None,
+            size_bytes: None,
+            created_at: None,
+            modified_at: None,
+        }
+    }
+
+    pub fn file(display_name: impl Into<String>, path: PathBuf) -> Self {
+        Self {
+            artifact_type: ArtifactType::File,
+            display_name: display_name.into(),
+            path: Some(path),
+            command_line: None,
+            registry_key: None,
+            registry_value_name: None,
+            url_or_domain: None,
+            sha256: None,
+            size_bytes: None,
+            created_at: None,
+            modified_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,11 +263,13 @@ pub struct Finding {
     pub description: String,
     pub evidence_level: EvidenceLevel,
     pub source: String,
+    pub artifact: Option<ArtifactRef>,
     pub related_iocs: Vec<String>,
     pub tags: Vec<String>,
     pub affects_risk: bool,
     pub confidence: u8,
     pub recommended_action: Option<String>,
+    pub notes: Vec<String>,
 }
 
 impl Finding {
@@ -169,20 +280,16 @@ impl Finding {
         description: impl Into<String>,
         source: impl Into<String>,
     ) -> Self {
-        Self {
-            id: id.into(),
-            timestamp: Local::now(),
+        Self::new(
+            id,
             category,
-            title: title.into(),
-            description: description.into(),
-            evidence_level: EvidenceLevel::Informational,
-            source: source.into(),
-            related_iocs: Vec::new(),
-            tags: vec!["info".to_string()],
-            affects_risk: false,
-            confidence: 100,
-            recommended_action: None,
-        }
+            title,
+            description,
+            EvidenceLevel::Informational,
+            source,
+            false,
+            100,
+        )
     }
 
     pub fn risk_finding(
@@ -192,10 +299,29 @@ impl Finding {
         description: impl Into<String>,
         evidence_level: EvidenceLevel,
         source: impl Into<String>,
-        related_iocs: Vec<String>,
-        tags: Vec<String>,
         confidence: u8,
-        recommended_action: Option<String>,
+    ) -> Self {
+        Self::new(
+            id,
+            category,
+            title,
+            description,
+            evidence_level,
+            source,
+            evidence_level.affects_incident_risk(),
+            confidence,
+        )
+    }
+
+    pub fn new(
+        id: impl Into<String>,
+        category: FindingCategory,
+        title: impl Into<String>,
+        description: impl Into<String>,
+        evidence_level: EvidenceLevel,
+        source: impl Into<String>,
+        affects_risk: bool,
+        confidence: u8,
     ) -> Self {
         Self {
             id: id.into(),
@@ -205,41 +331,117 @@ impl Finding {
             description: description.into(),
             evidence_level,
             source: source.into(),
-            related_iocs,
-            tags,
-            affects_risk: true,
+            artifact: None,
+            related_iocs: Vec::new(),
+            tags: Vec::new(),
+            affects_risk,
             confidence: confidence.min(100),
-            recommended_action,
+            recommended_action: None,
+            notes: Vec::new(),
         }
     }
+
+    pub fn with_artifact(mut self, artifact: ArtifactRef) -> Self {
+        self.artifact = Some(artifact);
+        self
+    }
+
+    pub fn with_ioc(mut self, ioc: impl Into<String>) -> Self {
+        self.related_iocs.push(ioc.into());
+        self
+    }
+
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tags.push(tag.into());
+        self
+    }
+
+    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.notes.push(note.into());
+        self
+    }
+
+    pub fn with_recommended_action(mut self, action: impl Into<String>) -> Self {
+        self.recommended_action = Some(action.into());
+        self
+    }
+
+    pub fn short_line(&self) -> String {
+        format!(
+            "[{}] {} | niveau={} | confiance={} | risque={}",
+            self.id,
+            self.title,
+            self.evidence_level.label(),
+            self.confidence,
+            if self.affects_risk { "oui" } else { "non" }
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimelineKind {
+    App,
+    Collector,
+    Finding,
+    Action,
+    Report,
+    Safety,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineEvent {
+    pub id: String,
     pub timestamp: DateTime<Local>,
+    pub kind: TimelineKind,
     pub title: String,
     pub details: String,
+    pub related_finding_id: Option<String>,
+    pub related_action_id: Option<String>,
 }
 
 impl TimelineEvent {
     pub fn now(title: impl Into<String>, details: impl Into<String>) -> Self {
+        Self::with_kind(TimelineKind::App, title, details)
+    }
+
+    pub fn with_kind(
+        kind: TimelineKind,
+        title: impl Into<String>,
+        details: impl Into<String>,
+    ) -> Self {
         Self {
+            id: next_id("TL", &TIMELINE_COUNTER),
             timestamp: Local::now(),
+            kind,
             title: title.into(),
             details: details.into(),
+            related_finding_id: None,
+            related_action_id: None,
         }
+    }
+
+    pub fn related_to_finding(mut self, finding_id: impl Into<String>) -> Self {
+        self.related_finding_id = Some(finding_id.into());
+        self
+    }
+
+    pub fn related_to_action(mut self, action_id: impl Into<String>) -> Self {
+        self.related_action_id = Some(action_id.into());
+        self
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActionRecord {
-    pub timestamp: DateTime<Local>,
-    pub mode: ExecutionMode,
-    pub action: String,
-    pub reason: String,
-    pub status: ActionStatus,
-    pub reversible: bool,
-    pub rollback_hint: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActionKind {
+    Noop,
+    ReportOnly,
+    Defender,
+    ProcessKill,
+    FileQuarantine,
+    RegistryDisable,
+    ScheduledTaskDisable,
+    ServiceDisable,
+    OfflineScan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,21 +452,36 @@ pub enum ActionStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionRecord {
+    pub id: String,
+    pub timestamp: DateTime<Local>,
+    pub mode: ExecutionMode,
+    pub kind: ActionKind,
+    pub action: String,
+    pub target: Option<String>,
+    pub reason: String,
+    pub status: ActionStatus,
+    pub reversible: bool,
+    pub requires_confirmation: bool,
+    pub evidence_ids: Vec<String>,
+    pub rollback_hint: Option<String>,
+    pub result: Option<String>,
+}
+
 impl ActionRecord {
     pub fn planned(
         mode: ExecutionMode,
         action: impl Into<String>,
         reason: impl Into<String>,
     ) -> Self {
-        Self {
-            timestamp: Local::now(),
+        Self::new(
             mode,
-            action: action.into(),
-            reason: reason.into(),
-            status: ActionStatus::Planned,
-            reversible: true,
-            rollback_hint: None,
-        }
+            ActionKind::ReportOnly,
+            action,
+            reason,
+            ActionStatus::Planned,
+        )
     }
 
     pub fn skipped(
@@ -272,15 +489,60 @@ impl ActionRecord {
         action: impl Into<String>,
         reason: impl Into<String>,
     ) -> Self {
+        Self::new(
+            mode,
+            ActionKind::Noop,
+            action,
+            reason,
+            ActionStatus::Skipped,
+        )
+    }
+
+    pub fn new(
+        mode: ExecutionMode,
+        kind: ActionKind,
+        action: impl Into<String>,
+        reason: impl Into<String>,
+        status: ActionStatus,
+    ) -> Self {
         Self {
+            id: next_id("ACT", &ACTION_COUNTER),
             timestamp: Local::now(),
             mode,
+            kind,
             action: action.into(),
+            target: None,
             reason: reason.into(),
-            status: ActionStatus::Skipped,
+            status,
             reversible: true,
+            requires_confirmation: matches!(
+                mode,
+                ExecutionMode::GuidedCleanup | ExecutionMode::DefenderOfflinePlan
+            ),
+            evidence_ids: Vec::new(),
             rollback_hint: None,
+            result: None,
         }
+    }
+
+    pub fn with_target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
+    pub fn with_evidence(mut self, evidence_id: impl Into<String>) -> Self {
+        self.evidence_ids.push(evidence_id.into());
+        self
+    }
+
+    pub fn with_rollback_hint(mut self, rollback_hint: impl Into<String>) -> Self {
+        self.rollback_hint = Some(rollback_hint.into());
+        self
+    }
+
+    pub fn not_reversible(mut self) -> Self {
+        self.reversible = false;
+        self
     }
 }
 
@@ -349,7 +611,7 @@ impl Default for SafetyPolicy {
                 "Un score Vert signifie seulement absence de preuve dans le périmètre audité.".into(),
                 "Une preuve faible ne doit pas déclencher seule une suppression destructive.".into(),
                 "IssaGuard orchestre et documente ; il ne remplace pas Microsoft Defender.".into(),
-                "La Partie 2 ne collecte pas encore les preuves réelles Defender/processus/fichiers.".into(),
+                "La Partie 3 ne collecte pas encore les preuves réelles Defender/processus/fichiers.".into(),
             ],
         }
     }
@@ -456,6 +718,7 @@ impl Default for IocSet {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportMetadata {
+    pub schema_version: String,
     pub tool_name: String,
     pub tool_version: String,
     pub generated_at: DateTime<Local>,
@@ -467,11 +730,69 @@ pub struct ReportMetadata {
     pub scope: RiskAssessmentScope,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DiagnosticCounts {
+    pub findings_total: usize,
+    pub risk_findings_total: usize,
+    pub informational_total: usize,
+    pub suspicion_total: usize,
+    pub weak_total: usize,
+    pub strong_total: usize,
+    pub actions_total: usize,
+    pub actions_planned: usize,
+    pub actions_skipped: usize,
+    pub actions_completed: usize,
+    pub actions_failed: usize,
+}
+
+impl DiagnosticCounts {
+    pub fn from_parts(findings: &[Finding], actions: &[ActionRecord]) -> Self {
+        Self {
+            findings_total: findings.len(),
+            risk_findings_total: findings.iter().filter(|f| f.affects_risk).count(),
+            informational_total: findings
+                .iter()
+                .filter(|f| matches!(f.evidence_level, EvidenceLevel::Informational))
+                .count(),
+            suspicion_total: findings
+                .iter()
+                .filter(|f| matches!(f.evidence_level, EvidenceLevel::Suspicion))
+                .count(),
+            weak_total: findings
+                .iter()
+                .filter(|f| matches!(f.evidence_level, EvidenceLevel::Weak))
+                .count(),
+            strong_total: findings
+                .iter()
+                .filter(|f| matches!(f.evidence_level, EvidenceLevel::Strong))
+                .count(),
+            actions_total: actions.len(),
+            actions_planned: actions
+                .iter()
+                .filter(|a| matches!(a.status, ActionStatus::Planned))
+                .count(),
+            actions_skipped: actions
+                .iter()
+                .filter(|a| matches!(a.status, ActionStatus::Skipped))
+                .count(),
+            actions_completed: actions
+                .iter()
+                .filter(|a| matches!(a.status, ActionStatus::Completed))
+                .count(),
+            actions_failed: actions
+                .iter()
+                .filter(|a| matches!(a.status, ActionStatus::Failed))
+                .count(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReportData {
+pub struct Report {
     pub metadata: ReportMetadata,
     pub risk_level: RiskLevel,
     pub risk_message: String,
+    pub counts: DiagnosticCounts,
     pub safety_policy: SafetyPolicy,
     pub iocs: IocSet,
     pub system_paths: WindowsPaths,
@@ -481,7 +802,7 @@ pub struct ReportData {
     pub timeline: Vec<TimelineEvent>,
 }
 
-impl ReportData {
+impl Report {
     pub fn new(
         tool_version: impl Into<String>,
         report_dir: PathBuf,
@@ -496,6 +817,7 @@ impl ReportData {
 
         Self {
             metadata: ReportMetadata {
+                schema_version: "3".into(),
                 tool_name: "IssaGuard".into(),
                 tool_version,
                 generated_at: Local::now(),
@@ -512,6 +834,7 @@ impl ReportData {
             },
             risk_level,
             risk_message: risk_level.message().to_string(),
+            counts: DiagnosticCounts::default(),
             safety_policy: SafetyPolicy::default(),
             iocs: IocSet::default(),
             system_paths,
@@ -520,8 +843,109 @@ impl ReportData {
             actions: Vec::new(),
             timeline: vec![TimelineEvent::now(
                 "Initialisation",
-                "Création du contexte IssaGuard Partie 2.",
+                "Création du contexte IssaGuard Partie 3.",
             )],
         }
     }
+
+    pub fn add_finding(&mut self, finding: Finding) {
+        let event = TimelineEvent::with_kind(
+            TimelineKind::Finding,
+            "Constat ajouté",
+            finding.short_line(),
+        )
+        .related_to_finding(finding.id.clone());
+
+        self.timeline.push(event);
+        self.findings.push(finding);
+        self.recalculate_counts();
+    }
+
+    pub fn extend_findings<I>(&mut self, findings: I)
+    where
+        I: IntoIterator<Item = Finding>,
+    {
+        for finding in findings {
+            self.add_finding(finding);
+        }
+    }
+
+    pub fn add_action(&mut self, action: ActionRecord) {
+        let event = TimelineEvent::with_kind(
+            TimelineKind::Action,
+            "Action enregistrée",
+            format!("{} | statut={:?}", action.action, action.status),
+        )
+        .related_to_action(action.id.clone());
+
+        self.timeline.push(event);
+        self.actions.push(action);
+        self.recalculate_counts();
+    }
+
+    pub fn extend_actions<I>(&mut self, actions: I)
+    where
+        I: IntoIterator<Item = ActionRecord>,
+    {
+        for action in actions {
+            self.add_action(action);
+        }
+    }
+
+    pub fn add_timeline(
+        &mut self,
+        kind: TimelineKind,
+        title: impl Into<String>,
+        details: impl Into<String>,
+    ) {
+        self.timeline
+            .push(TimelineEvent::with_kind(kind, title, details));
+    }
+
+    pub fn recalculate_counts(&mut self) {
+        self.counts = DiagnosticCounts::from_parts(&self.findings, &self.actions);
+    }
+
+    pub fn finalize_risk(&mut self) {
+        self.recalculate_counts();
+        self.risk_level =
+            crate::core::risk_score::RiskScoreEngine::evaluate(self.metadata.scope, &self.findings);
+        self.risk_message = self.risk_level.message().to_string();
+    }
+
+    pub fn validate(&self) -> AppResult<()> {
+        if self.metadata.tool_name.trim().is_empty() {
+            return Err(IssaError::InvalidReport("tool_name vide".into()));
+        }
+
+        if self.metadata.report_dir.as_os_str().is_empty() {
+            return Err(IssaError::InvalidReport("report_dir vide".into()));
+        }
+
+        for finding in &self.findings {
+            if finding.id.trim().is_empty() {
+                return Err(IssaError::InvalidReport("finding avec id vide".into()));
+            }
+
+            if finding.confidence > 100 {
+                return Err(IssaError::InvalidReport(format!(
+                    "finding {} avec confiance > 100",
+                    finding.id
+                )));
+            }
+        }
+
+        for action in &self.actions {
+            if action.id.trim().is_empty() {
+                return Err(IssaError::InvalidReport("action avec id vide".into()));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn next_id(prefix: &str, counter: &AtomicUsize) -> String {
+    let value = counter.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}-{value:04}")
 }

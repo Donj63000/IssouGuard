@@ -10,7 +10,6 @@ pub struct PowerShellOutput {
 }
 
 /// Exécute une commande PowerShell locale et capture stdout/stderr.
-/// Partie 2 : fonction prête mais peu utilisée.
 /// Règle : ne jamais passer d'URL suspecte à cette fonction.
 pub fn run_powershell_capture(command: &str) -> AppResult<PowerShellOutput> {
     #[cfg(target_os = "windows")]

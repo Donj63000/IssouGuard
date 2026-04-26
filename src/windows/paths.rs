@@ -15,7 +15,6 @@ pub fn resolve_system_paths() -> WindowsPaths {
         .unwrap_or_else(|| current_dir.clone());
 
     let downloads_dir = user_profile.as_ref().map(|p| p.join("Downloads"));
-
     let temp_dir = std::env::temp_dir();
 
     let local_appdata = env_path("LOCALAPPDATA");
