@@ -1,5 +1,6 @@
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -79,6 +80,7 @@ impl fmt::Display for ExecutionMode {
 pub enum RiskAssessmentScope {
     FoundationOnly,
     DataAndReportOnly,
+    DefenderEvidenceOnly,
     AuditEvidence,
 }
 
@@ -103,7 +105,7 @@ impl RiskLevel {
     pub fn message(self) -> &'static str {
         match self {
             Self::NotAssessed => {
-                "Score non calculé : cette étape définit les données et les rapports, mais ne collecte pas encore les preuves système."
+                "Score non calculé : le périmètre actuel ne collecte pas encore de preuves système exploitables."
             }
             Self::Green => {
                 "Aucune preuve locale d'exécution ou de persistance suspecte dans le périmètre audité. Scan Defender recommandé."
@@ -186,6 +188,7 @@ pub enum ArtifactType {
     Service,
     DefenderThreat,
     EventLog,
+    DefenderPreference,
     Other,
 }
 
@@ -252,6 +255,18 @@ impl ArtifactRef {
             modified_at: None,
         }
     }
+
+    pub fn defender_preference(display_name: impl Into<String>) -> Self {
+        Self::new(ArtifactType::DefenderPreference, display_name)
+    }
+
+    pub fn defender_threat(display_name: impl Into<String>) -> Self {
+        Self::new(ArtifactType::DefenderThreat, display_name)
+    }
+
+    pub fn event_log(display_name: impl Into<String>) -> Self {
+        Self::new(ArtifactType::EventLog, display_name)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,6 +328,7 @@ impl Finding {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: impl Into<String>,
         category: FindingCategory,
@@ -351,8 +367,30 @@ impl Finding {
         self
     }
 
+    pub fn with_iocs<I, S>(mut self, iocs: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for ioc in iocs {
+            self.related_iocs.push(ioc.into());
+        }
+        self
+    }
+
     pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
         self.tags.push(tag.into());
+        self
+    }
+
+    pub fn with_tags<I, S>(mut self, tags: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for tag in tags {
+            self.tags.push(tag.into());
+        }
         self
     }
 
@@ -572,6 +610,59 @@ pub struct ToolSignatureInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DefenderCommandCapture {
+    pub label: String,
+    pub command_kind: String,
+    pub success: bool,
+    pub status_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub parsed_json: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DefenderEventRecord {
+    pub time_created: Option<String>,
+    pub event_id: Option<u32>,
+    pub provider_name: Option<String>,
+    pub level_display_name: Option<String>,
+    pub record_id: Option<u64>,
+    pub machine_name: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DefenderSnapshot {
+    pub generated_at: DateTime<Local>,
+    pub available: bool,
+    pub status: Option<Value>,
+    pub preferences: Option<Value>,
+    pub threats: Vec<Value>,
+    pub detections: Vec<Value>,
+    pub events: Vec<DefenderEventRecord>,
+    pub command_captures: Vec<DefenderCommandCapture>,
+    pub errors: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+impl Default for DefenderSnapshot {
+    fn default() -> Self {
+        Self {
+            generated_at: Local::now(),
+            available: false,
+            status: None,
+            preferences: None,
+            threats: Vec::new(),
+            detections: Vec::new(),
+            events: Vec::new(),
+            command_captures: Vec::new(),
+            errors: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafetyPolicy {
     pub local_only: bool,
     pub no_contact_with_suspicious_domains: bool,
@@ -611,7 +702,7 @@ impl Default for SafetyPolicy {
                 "Un score Vert signifie seulement absence de preuve dans le périmètre audité.".into(),
                 "Une preuve faible ne doit pas déclencher seule une suppression destructive.".into(),
                 "IssaGuard orchestre et documente ; il ne remplace pas Microsoft Defender.".into(),
-                "La Partie 3 ne collecte pas encore les preuves réelles Defender/processus/fichiers.".into(),
+                "La Partie 4 se limite à Defender : processus, fichiers et persistances seront ajoutés ensuite.".into(),
             ],
         }
     }
@@ -797,6 +888,7 @@ pub struct Report {
     pub iocs: IocSet,
     pub system_paths: WindowsPaths,
     pub signature: ToolSignatureInfo,
+    pub defender: Option<DefenderSnapshot>,
     pub findings: Vec<Finding>,
     pub actions: Vec<ActionRecord>,
     pub timeline: Vec<TimelineEvent>,
@@ -817,7 +909,7 @@ impl Report {
 
         Self {
             metadata: ReportMetadata {
-                schema_version: "3".into(),
+                schema_version: "4".into(),
                 tool_name: "IssaGuard".into(),
                 tool_version,
                 generated_at: Local::now(),
@@ -839,11 +931,12 @@ impl Report {
             iocs: IocSet::default(),
             system_paths,
             signature,
+            defender: None,
             findings: Vec::new(),
             actions: Vec::new(),
             timeline: vec![TimelineEvent::now(
                 "Initialisation",
-                "Création du contexte IssaGuard Partie 3.",
+                "Création du contexte IssaGuard Partie 4.",
             )],
         }
     }
@@ -910,7 +1003,11 @@ impl Report {
         self.recalculate_counts();
         self.risk_level =
             crate::core::risk_score::RiskScoreEngine::evaluate(self.metadata.scope, &self.findings);
-        self.risk_message = self.risk_level.message().to_string();
+        self.risk_message = crate::core::risk_score::RiskScoreEngine::message_for_scope(
+            self.risk_level,
+            self.metadata.scope,
+        )
+        .to_string();
     }
 
     pub fn validate(&self) -> AppResult<()> {

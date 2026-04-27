@@ -9,8 +9,8 @@ pub mod services;
 
 use crate::core::model::{Finding, FindingCategory, WindowsPaths};
 
-/// Partie 3 : collecteur de fondation uniquement.
-/// Il documente le socle sans auditer Defender, processus, registre ou fichiers.
+/// Partie 4 : collecteur de fondation.
+/// Il documente le socle ; la collecte Defender réelle est dans collectors/defender.rs.
 pub fn collect_foundation_findings(paths: &WindowsPaths, is_admin: bool) -> Vec<Finding> {
     vec![
         Finding::informational(
@@ -20,13 +20,13 @@ pub fn collect_foundation_findings(paths: &WindowsPaths, is_admin: bool) -> Vec<
             "Les modules principaux sont présents : core, collectors, remediation, windows, tui.",
             "collectors::collect_foundation_findings",
         )
-        .with_tag("part3")
+        .with_tag("part4")
         .with_tag("architecture"),
         Finding::informational(
             "FOUNDATION-002",
             FindingCategory::SafetyPolicy,
             "Politique de sécurité chargée",
-            "La Partie 3 est non destructive et ne contacte aucun domaine suspect.",
+            "La Partie 4 est non destructive, collecte Defender en lecture seule et ne contacte aucun domaine suspect.",
             "collectors::collect_foundation_findings",
         )
         .with_tag("safety"),
@@ -128,6 +128,6 @@ pub fn collect_data_model_findings() -> Vec<Finding> {
             "core::model::Report",
         )
         .with_tag("model:report")
-        .with_recommended_action("Continuer avec la Partie 4 pour alimenter ce modèle avec les preuves Defender."),
+        .with_recommended_action("Lire les fichiers Defender, puis continuer avec la Partie 5 pour les traces processus/PowerShell/RunMRU."),
     ]
 }

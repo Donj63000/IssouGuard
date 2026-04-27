@@ -6,34 +6,35 @@ pub mod quarantine;
 
 use crate::core::model::{ActionKind, ActionRecord, ActionStatus, ExecutionMode};
 
-/// Partie 3 : aucune action système réelle.
+/// Partie 4 : aucune action système réelle.
 /// On documente seulement ce que le mode autorisera plus tard.
-pub fn part3_planned_actions(mode: ExecutionMode) -> Vec<ActionRecord> {
+pub fn part4_planned_actions(mode: ExecutionMode) -> Vec<ActionRecord> {
     match mode {
         ExecutionMode::AuditOnly => vec![ActionRecord::skipped(
             mode,
-            "Remédiation système",
-            "Mode audit seul : aucune modification autorisée.",
+            "Remédiation Defender",
+            "Mode audit seul : aucune modification Defender autorisée.",
         )],
         ExecutionMode::AuditAndPlan => vec![ActionRecord::planned(
             mode,
-            "Générer un plan de nettoyage",
-            "Les corrections seront proposées après collecte réelle dans les prochaines parties.",
+            "Préparer un plan de nettoyage Defender",
+            "Les corrections Defender seront proposées après confirmation des preuves et seulement en Partie 9.",
         )
-        .with_rollback_hint("Aucun rollback : aucun changement système en Partie 3.")],
+        .with_rollback_hint("Aucun rollback : aucune modification système en Partie 4.")],
         ExecutionMode::GuidedCleanup => vec![ActionRecord::new(
             mode,
-            ActionKind::ReportOnly,
-            "Préparer le nettoyage guidé réversible",
-            "Chaque action future devra être confirmée, journalisée et réversible.",
+            ActionKind::Defender,
+            "Collecter Defender avant nettoyage guidé",
+            "Partie 4 : collecte préalable uniquement ; aucune action Defender n'est exécutée.",
             ActionStatus::Planned,
         )
-        .with_rollback_hint("La Partie 3 ne modifie rien ; rollback non nécessaire.")],
+        .with_target("Microsoft Defender")
+        .with_rollback_hint("La Partie 4 ne modifie rien ; rollback non nécessaire.")],
         ExecutionMode::DefenderOfflinePlan => vec![ActionRecord::new(
             mode,
             ActionKind::OfflineScan,
-            "Proposer Microsoft Defender Offline",
-            "Le scan hors ligne ne doit pas être déclenché silencieusement.",
+            "Documenter le besoin éventuel de Microsoft Defender Offline",
+            "Le scan hors ligne ne doit pas être déclenché silencieusement. Il sera proposé après analyse du rapport.",
             ActionStatus::Planned,
         )
         .with_target("Microsoft Defender Offline")],

@@ -37,7 +37,7 @@ impl App {
 
         let system_paths = windows::paths::resolve_system_paths();
         let report_dir = report::create_report_dir(&system_paths)?;
-        report::write_log_line(&report_dir, "Initialisation IssaGuard Partie 3")?;
+        report::write_log_line(&report_dir, "Initialisation IssaGuard Partie 4")?;
 
         let is_admin = windows::admin::is_elevated();
         let signature = windows::signature::current_tool_signature(&self.config.version);
@@ -47,12 +47,12 @@ impl App {
             report_dir,
             is_admin,
             mode,
-            RiskAssessmentScope::DataAndReportOnly,
+            RiskAssessmentScope::DefenderEvidenceOnly,
             system_paths,
             signature,
         );
 
-        self.populate_data_and_report_model(&mut report_data)?;
+        self.populate_defender_audit(&mut report_data)?;
         report_data.finalize_risk();
 
         report::write_report_package(&report_data)?;
@@ -61,7 +61,7 @@ impl App {
         Ok(())
     }
 
-    fn populate_data_and_report_model(&self, report_data: &mut Report) -> AppResult<()> {
+    fn populate_defender_audit(&self, report_data: &mut Report) -> AppResult<()> {
         report_data.add_timeline(
             TimelineKind::App,
             "Mode sélectionné",
@@ -75,14 +75,14 @@ impl App {
         );
 
         report_data.add_timeline(
-            TimelineKind::Report,
-            "Modèles de données",
-            "Chargement des types Finding, EvidenceLevel, RiskLevel, ActionRecord, TimelineEvent et Report.",
+            TimelineKind::Collector,
+            "Collecte Defender lecture seule",
+            "Collecte Get-MpComputerStatus, Get-MpPreference, Get-MpThreat, Get-MpThreatDetection et événements Defender.",
         );
 
         report::write_log_line(
             &report_data.metadata.report_dir,
-            "Chargement des modèles de données et du générateur de rapports",
+            "Début collecte Defender lecture seule",
         )?;
 
         report_data.extend_findings(collectors::collect_foundation_findings(
@@ -92,7 +92,24 @@ impl App {
 
         report_data.extend_findings(collectors::collect_data_model_findings());
 
-        report_data.extend_actions(remediation::part3_planned_actions(
+        let defender_collection =
+            collectors::defender::collect_defender_snapshot(&report_data.iocs);
+
+        report_data.add_timeline(
+            TimelineKind::Collector,
+            "Collecte Defender terminée",
+            format!(
+                "Commandes={}, événements={}, erreurs={}",
+                defender_collection.snapshot.command_captures.len(),
+                defender_collection.snapshot.events.len(),
+                defender_collection.snapshot.errors.len()
+            ),
+        );
+
+        report_data.defender = Some(defender_collection.snapshot);
+        report_data.extend_findings(defender_collection.findings);
+
+        report_data.extend_actions(remediation::part4_planned_actions(
             report_data.metadata.mode,
         ));
 
@@ -100,9 +117,14 @@ impl App {
             report_data.add_timeline(
                 TimelineKind::Safety,
                 "Remédiation non exécutée",
-                "La Partie 3 documente les actions futures mais ne modifie pas le système.",
+                "La Partie 4 collecte Defender uniquement. Aucune préférence Defender n'est modifiée.",
             );
         }
+
+        report::write_log_line(
+            &report_data.metadata.report_dir,
+            "Fin collecte Defender lecture seule",
+        )?;
 
         Ok(())
     }

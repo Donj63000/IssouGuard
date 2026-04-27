@@ -7,8 +7,8 @@ pub fn print_banner(version: &str) {
     println!("========================================================");
     println!("Version : {version}");
     println!();
-    println!("Partie 3 : modèles de données internes et rapports robustes.");
-    println!("Aucune suppression. Aucun téléchargement. Aucun contact avec les domaines suspects.");
+    println!("Partie 4 : collecte Microsoft Defender en lecture seule.");
+    println!("Aucune suppression. Aucun nettoyage. Aucun changement Defender. Aucun contact avec les domaines suspects.");
     println!();
 }
 
@@ -61,17 +61,35 @@ pub fn print_result_summary(report: &Report) {
     println!("  - suspicions : {}", report.counts.suspicion_total);
     println!();
 
+    if let Some(defender) = &report.defender {
+        println!("Collecte Defender :");
+        println!(
+            "  - disponible : {}",
+            if defender.available {
+                "oui"
+            } else {
+                "non / partiel"
+            }
+        );
+        println!("  - commandes  : {}", defender.command_captures.len());
+        println!("  - menaces    : {}", defender.threats.len());
+        println!("  - détections : {}", defender.detections.len());
+        println!("  - événements : {}", defender.events.len());
+        println!("  - erreurs    : {}", defender.errors.len());
+        println!();
+    }
+
     println!("Fichiers utiles dans le rapport :");
     println!("  - report.txt / report.json");
+    println!("  - defender_before.txt");
+    println!("  - defender_snapshot.json");
+    println!("  - defender_events.txt");
     println!("  - findings.txt / findings.json");
-    println!("  - actions.txt / actions.json");
-    println!("  - timeline.txt");
     println!("  - evidence_summary.txt");
-    println!("  - data_model.txt");
     println!("  - issaguard.log");
     println!();
 
-    println!("Note : cette Partie 3 ne fait pas encore l'audit réel. C'est normal que le risque soit NON ÉVALUÉ.");
+    println!("Note : Partie 4 = score basé sur Defender seulement. Les processus, fichiers et persistances arrivent ensuite.");
 }
 
 pub fn print_opened_report(path: &Path) {

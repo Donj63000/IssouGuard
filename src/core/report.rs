@@ -1,4 +1,4 @@
-use crate::core::model::{AppResult, IssaError, Report, WindowsPaths};
+use crate::core::model::{AppResult, DefenderSnapshot, IssaError, Report, WindowsPaths};
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -19,6 +19,8 @@ const REQUIRED_REPORT_FILES: &[&str] = &[
     "manifest.json",
     "defender_before.txt",
     "defender_after.txt",
+    "defender_events.txt",
+    "defender_snapshot.json",
     "suspicious_processes.txt",
     "suspicious_files.txt",
     "suspicious_registry.txt",
@@ -69,7 +71,7 @@ pub fn write_report_package(report: &Report) -> AppResult<()> {
 
     write_log_line(
         &report.metadata.report_dir,
-        "Écriture du package de rapport Partie 3",
+        "Écriture du package de rapport Partie 4",
     )?;
 
     write_json(report.metadata.report_dir.join("report.json"), report)?;
@@ -82,13 +84,25 @@ pub fn write_report_package(report: &Report) -> AppResult<()> {
         &report.actions,
     )?;
 
+    if let Some(defender) = &report.defender {
+        write_json(
+            report.metadata.report_dir.join("defender_snapshot.json"),
+            defender,
+        )?;
+    } else {
+        write_json(
+            report.metadata.report_dir.join("defender_snapshot.json"),
+            &serde_json::json!({"note": "Aucune collecte Defender disponible."}),
+        )?;
+    }
+
     let manifest = crate::core::quarantine::QuarantineManifest::empty();
     write_json(report.metadata.report_dir.join("manifest.json"), &manifest)?;
 
     let rollback = serde_json::json!({
         "schema_version": &report.metadata.schema_version,
         "tool_version": &report.metadata.tool_version,
-        "note": "Partie 3 : aucune modification système, donc aucun rollback nécessaire.",
+        "note": "Partie 4 : collecte Defender lecture seule. Aucune modification système, donc aucun rollback nécessaire.",
         "entries": []
     });
 
@@ -125,6 +139,21 @@ pub fn write_report_package(report: &Report) -> AppResult<()> {
     )?;
 
     write_text(
+        report.metadata.report_dir.join("defender_before.txt"),
+        render_defender_before_txt(report.defender.as_ref()),
+    )?;
+
+    write_text(
+        report.metadata.report_dir.join("defender_after.txt"),
+        render_defender_after_txt(),
+    )?;
+
+    write_text(
+        report.metadata.report_dir.join("defender_events.txt"),
+        render_defender_events_txt(report.defender.as_ref()),
+    )?;
+
+    write_text(
         report.metadata.report_dir.join("architecture.txt"),
         render_architecture_txt(),
     )?;
@@ -144,7 +173,7 @@ pub fn write_report_package(report: &Report) -> AppResult<()> {
         render_safety_policy_txt(report),
     )?;
 
-    write_log_line(&report.metadata.report_dir, "Rapport Partie 3 terminé")?;
+    write_log_line(&report.metadata.report_dir, "Rapport Partie 4 terminé")?;
     Ok(())
 }
 
@@ -155,7 +184,7 @@ fn ensure_placeholder_files(report_dir: &Path) -> AppResult<()> {
         if !path.exists() {
             fs::write(
                 path,
-                "IssaGuard Partie 3 : fichier réservé. Le contenu réel sera ajouté par les collecteurs des parties suivantes.\n",
+                "IssaGuard Partie 4 : fichier réservé. Le contenu réel sera ajouté par les collecteurs disponibles.\n",
             )?;
         }
     }
@@ -253,11 +282,46 @@ fn render_report_txt(report: &Report) -> String {
 
     out.push_str("Important\n");
     out.push_str("---------\n");
-    out.push_str("Cette Partie 3 définit les données internes et renforce les rapports.\n");
-    out.push_str(
-        "Elle ne réalise pas encore l'audit système complet. Le risque reste donc NON ÉVALUÉ.\n",
-    );
-    out.push_str("Ne pas interpréter ce rapport comme une preuve que le PC est sain.\n\n");
+    out.push_str("Cette Partie 4 collecte Microsoft Defender en lecture seule.\n");
+    out.push_str("Elle ne modifie aucune préférence Defender, ne lance aucun scan, ne retire aucune exclusion et ne supprime rien.\n");
+    out.push_str("Un risque Vert à ce stade signifie seulement : aucune preuve Defender liée dans le périmètre collecté.\n");
+    out.push_str("Les processus, fichiers, historique PowerShell, RunMRU et persistances seront audités dans les parties suivantes.\n\n");
+
+    out.push_str("Résumé Defender\n");
+    out.push_str("---------------\n");
+    match &report.defender {
+        Some(defender) => {
+            out.push_str(&format!(
+                "Collecte disponible  : {}\n",
+                if defender.available {
+                    "oui"
+                } else {
+                    "non / partielle"
+                }
+            ));
+            out.push_str(&format!(
+                "Commandes capturées  : {}\n",
+                defender.command_captures.len()
+            ));
+            out.push_str(&format!(
+                "Menaces              : {}\n",
+                defender.threats.len()
+            ));
+            out.push_str(&format!(
+                "Détections           : {}\n",
+                defender.detections.len()
+            ));
+            out.push_str(&format!(
+                "Événements ciblés    : {}\n",
+                defender.events.len()
+            ));
+            out.push_str(&format!(
+                "Erreurs collecte     : {}\n\n",
+                defender.errors.len()
+            ));
+        }
+        None => out.push_str("Aucune collecte Defender disponible.\n\n"),
+    }
 
     out.push_str("Signature outil\n");
     out.push_str("---------------\n");
@@ -288,11 +352,10 @@ fn render_report_txt(report: &Report) -> String {
 
     out.push_str("Actions recommandées à ce stade\n");
     out.push_str("--------------------------------\n");
-    out.push_str("- Continuer avec la Partie 4 pour collecter les preuves Defender.\n");
+    out.push_str("- Lire defender_before.txt et defender_events.txt.\n");
+    out.push_str("- Continuer avec la Partie 5 pour processus, PowerShell history et RunMRU.\n");
     out.push_str("- Ne pas relancer la commande mshta ni visiter les domaines IOC.\n");
-    out.push_str(
-        "- Ne pas conclure que les comptes sont sûrs tant que l'audit n'est pas terminé.\n\n",
-    );
+    out.push_str("- Si le score est Rouge, prévoir nettoyage local guidé puis révocation sessions/mots de passe/tokens exposés.\n\n");
 
     out.push_str("Limites\n");
     out.push_str("-------\n");
@@ -419,7 +482,7 @@ fn render_evidence_summary_txt(report: &Report) -> String {
         "Affecte risque  : {}\n\n",
         report.counts.risk_findings_total
     ));
-    out.push_str("Rappel : Partie 3 = aucun audit réel. Ces compteurs décrivent seulement le socle et les modèles.\n");
+    out.push_str("Rappel : Partie 4 = preuves Defender uniquement. Un Vert ne couvre pas encore fichiers/processus/persistances.\n");
 
     out
 }
@@ -440,6 +503,126 @@ fn render_timeline_txt(report: &Report) -> String {
     out
 }
 
+fn render_defender_before_txt(defender: Option<&DefenderSnapshot>) -> String {
+    let mut out = String::new();
+    out.push_str("Microsoft Defender — état avant remédiation\n");
+    out.push_str("===========================================\n\n");
+    out.push_str(
+        "Partie 4 : collecte en lecture seule. Aucune modification Defender n'a été effectuée.\n\n",
+    );
+
+    let Some(defender) = defender else {
+        out.push_str("Aucune collecte Defender disponible.\n");
+        return out;
+    };
+
+    out.push_str(&format!(
+        "Date collecte        : {}\n",
+        defender.generated_at
+    ));
+    out.push_str(&format!(
+        "Disponible           : {}\n",
+        if defender.available {
+            "oui"
+        } else {
+            "non / partiel"
+        }
+    ));
+    out.push_str(&format!(
+        "Menaces              : {}\n",
+        defender.threats.len()
+    ));
+    out.push_str(&format!(
+        "Détections           : {}\n",
+        defender.detections.len()
+    ));
+    out.push_str(&format!(
+        "Événements           : {}\n",
+        defender.events.len()
+    ));
+    out.push_str(&format!(
+        "Erreurs              : {}\n\n",
+        defender.errors.len()
+    ));
+
+    if !defender.errors.is_empty() {
+        out.push_str("Erreurs de collecte\n");
+        out.push_str("-------------------\n");
+        for err in &defender.errors {
+            out.push_str(&format!("- {}\n", err));
+        }
+        out.push('\n');
+    }
+
+    out.push_str("Commandes capturées\n");
+    out.push_str("-------------------\n");
+    for capture in &defender.command_captures {
+        out.push_str(&format!("## {}\n", capture.label));
+        out.push_str(&format!("Succès      : {}\n", capture.success));
+        out.push_str(&format!("Code sortie : {:?}\n", capture.status_code));
+        if !capture.stderr.trim().is_empty() {
+            out.push_str(&format!("STDERR      : {}\n", capture.stderr.trim()));
+        }
+        out.push_str("STDOUT JSON :\n");
+        out.push_str(if capture.stdout.trim().is_empty() {
+            "<vide>\n"
+        } else {
+            capture.stdout.trim()
+        });
+        out.push_str("\n\n");
+    }
+
+    out
+}
+
+fn render_defender_after_txt() -> String {
+    "Microsoft Defender — état après remédiation\n==========================================\n\nPartie 4 : aucune remédiation exécutée. Ce fichier reste informatif.\nL'état après nettoyage sera produit dans la Partie 9 quand les actions guidées seront implémentées.\n".to_string()
+}
+
+fn render_defender_events_txt(defender: Option<&DefenderSnapshot>) -> String {
+    let mut out = String::new();
+    out.push_str("Événements Microsoft Defender ciblés\n");
+    out.push_str("====================================\n\n");
+    out.push_str(
+        "IDs collectés : 1116, 1117, 1118, 1119, 1007, 1008, 5007. Fenêtre : 30 jours.\n\n",
+    );
+
+    let Some(defender) = defender else {
+        out.push_str("Aucune collecte Defender disponible.\n");
+        return out;
+    };
+
+    if defender.events.is_empty() {
+        out.push_str("Aucun événement ciblé collecté.\n");
+        return out;
+    }
+
+    for event in &defender.events {
+        out.push_str(&format!(
+            "{} | ID={} | niveau={} | record={}\n",
+            event.time_created.as_deref().unwrap_or("inconnu"),
+            event
+                .event_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "inconnu".into()),
+            event.level_display_name.as_deref().unwrap_or("inconnu"),
+            event
+                .record_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "inconnu".into())
+        ));
+        out.push_str(&format!(
+            "Machine={} | Provider={}\n",
+            event.machine_name.as_deref().unwrap_or("inconnu"),
+            event.provider_name.as_deref().unwrap_or("inconnu")
+        ));
+        out.push_str(event.message.as_deref().unwrap_or(""));
+        out.push_str("\n\n---\n\n");
+    }
+
+    out
+}
+
 fn render_iocs_txt(report: &Report) -> String {
     let iocs = &report.iocs;
     let mut out = String::new();
@@ -447,56 +630,47 @@ fn render_iocs_txt(report: &Report) -> String {
     out.push_str("IOC cadrés pour IssaGuard\n");
     out.push_str("=========================\n\n");
 
-    out.push_str("URLs\n");
-    out.push_str("----\n");
+    out.push_str("URLs\n----\n");
     for item in &iocs.urls {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nDomaines\n");
-    out.push_str("--------\n");
+    out.push_str("\nDomaines\n--------\n");
     for item in &iocs.domains {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nProcessus\n");
-    out.push_str("---------\n");
+    out.push_str("\nProcessus\n---------\n");
     for item in &iocs.process_patterns {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nCommandes\n");
-    out.push_str("---------\n");
+    out.push_str("\nCommandes\n---------\n");
     for item in &iocs.command_patterns {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nFichiers suspects\n");
-    out.push_str("-----------------\n");
+    out.push_str("\nFichiers suspects\n-----------------\n");
     for item in &iocs.suspicious_file_names {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nExtensions suspectes\n");
-    out.push_str("--------------------\n");
+    out.push_str("\nExtensions suspectes\n--------------------\n");
     for item in &iocs.suspicious_extensions {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nEmplacements à inspecter\n");
-    out.push_str("------------------------\n");
+    out.push_str("\nEmplacements à inspecter\n------------------------\n");
     for item in &iocs.suspicious_locations {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nPersistances à inspecter\n");
-    out.push_str("------------------------\n");
+    out.push_str("\nPersistances à inspecter\n------------------------\n");
     for item in &iocs.persistence_locations {
         out.push_str(&format!("- {}\n", item));
     }
 
-    out.push_str("\nÉvénements Defender utiles\n");
-    out.push_str("-------------------------\n");
+    out.push_str("\nÉvénements Defender utiles\n-------------------------\n");
     for id in &iocs.defender_event_ids {
         out.push_str(&format!("- {}\n", id));
     }
@@ -574,8 +748,7 @@ fn render_safety_policy_txt(report: &Report) -> String {
         out.push_str(&format!("- {}\n", rule));
     }
 
-    out.push_str("\nLimites\n");
-    out.push_str("-------\n");
+    out.push_str("\nLimites\n-------\n");
 
     for limitation in &report.safety_policy.limitations {
         out.push_str(&format!("- {}\n", limitation));
@@ -585,44 +758,32 @@ fn render_safety_policy_txt(report: &Report) -> String {
 }
 
 fn render_data_model_txt() -> String {
-    r#"Modèles de données Partie 3
+    r#"Modèles de données Partie 4
 ============================
 
-Finding
--------
-Représente un constat. Il peut être purement informatif ou affecter le risque.
-Champs importants : id, catégorie, titre, description, niveau de preuve, source,
-artefact, IOC liés, tags, confiance, action recommandée.
+La Partie 4 conserve les modèles de la Partie 3 et ajoute DefenderSnapshot.
 
-EvidenceLevel
--------------
-- Informational : information utile, ne modifie pas le score.
-- Suspicion     : signal faible à vérifier.
-- Weak          : preuve faible, jamais suffisante seule pour une action destructive.
-- Strong        : preuve forte, peut faire monter le risque.
+DefenderSnapshot
+----------------
+Contient l'état Defender collecté en lecture seule : statut, préférences,
+menaces, détections, événements, sorties brutes PowerShell et erreurs.
 
-RiskLevel
----------
-- NON ÉVALUÉ : pas assez de preuves collectées.
-- VERT       : aucune preuve locale dans le périmètre audité.
-- ORANGE     : exécution probable/tentative bloquée sans persistance évidente.
-- ROUGE      : compromission probable ou traces fortes.
+DefenderCommandCapture
+----------------------
+Journalise chaque commande PowerShell locale : label, statut, stdout, stderr,
+JSON parsé. Les commandes sont en lecture seule.
 
-ActionRecord
-------------
-Journalise une action prévue, ignorée, réussie ou échouée. Toute remédiation future
-doit indiquer la cible, la raison, le statut, la réversibilité et le rollback.
+DefenderEventRecord
+-------------------
+Représente les événements Defender opérationnels ciblés : 1116, 1117, 1118,
+1119, 1007, 1008 et 5007.
 
-TimelineEvent
--------------
-Journal chronologique des étapes : application, collecteurs, findings, actions,
-rapport et sécurité.
-
-Report
-------
-Structure centrale sérialisée en report.json. Contient métadonnées, score,
-compteurs, politique de sécurité, IOC, chemins locaux, signature outil,
-findings, actions et timeline.
+Scoring Partie 4
+----------------
+- Vert   : aucune preuve Defender liée dans le périmètre collecté.
+- Orange : trace Defender compatible tentative/blocage ou visibilité partielle.
+- Rouge  : menace type Trojan/Stealer, action autorisée/échouée, protection
+           désactivée, exclusion suspecte ou changement Defender préoccupant.
 "#
     .to_string()
 }
@@ -666,10 +827,11 @@ src/
     powershell.rs
     signature.rs
 
-Partie 3
+Partie 4
 ========
-Objectif : données internes et rapports robustes.
-Cette étape ne collecte pas encore les preuves système réelles.
+Objectif : collecte Defender en lecture seule.
+Collecteurs actifs : collectors/defender.rs.
+Remédiation : non exécutée.
 "#
     .to_string()
 }

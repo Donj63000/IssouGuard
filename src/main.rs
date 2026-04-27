@@ -1,3 +1,6 @@
+// Je garde les stubs des parties suivantes compilables sans bruit pendant l'itération.
+#![allow(dead_code)]
+
 mod app;
 mod collectors;
 mod core;
